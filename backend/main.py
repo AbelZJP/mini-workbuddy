@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core import ROOT
 from .api.routers import (
+    canvas,
     capabilities,
     experts,
     messages,
@@ -27,6 +28,7 @@ app.add_middleware(
 
 for _router_module in (
     system,
+    canvas,
     workspaces,
     tasks,
     skills,

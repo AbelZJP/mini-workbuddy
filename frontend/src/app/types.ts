@@ -53,6 +53,10 @@ export type Model = {
   enabled?: boolean;
   supports_vision?: boolean;
   supports_image_generation?: boolean;
+  supports_video_generation?: boolean;
+  video_endpoint?: string;
+  video_status_endpoint?: string;
+  video_content_endpoint?: string;
   is_default?: boolean;
 };
 export type Capability = {
@@ -135,6 +139,31 @@ export type ExpertResponse = {
   departments: string[];
   synced: boolean;
   repository: string;
+};
+export type CanvasNodeKind =
+  | "text"
+  | "image-upload"
+  | "ai-image"
+  | "video-upload"
+  | "ai-video"
+  | "note";
+export type CanvasGraph = {
+  nodes: Array<{
+    id: string;
+    type: CanvasNodeKind;
+    position: { x: number; y: number };
+    data: Record<string, unknown>;
+  }>;
+  edges: Array<Record<string, unknown>>;
+  viewport: { x: number; y: number; zoom: number };
+};
+export type CanvasProject = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  graph: CanvasGraph;
+  created_at: string;
+  updated_at: string;
 };
 export type Run = {
   id: string;

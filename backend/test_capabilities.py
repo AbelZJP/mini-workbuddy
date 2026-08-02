@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .capability_executor import generate_image
+from .capability_executor import generate_image, generate_video
 from .capability_registry import capability_rows
 from .model_router import route_model, set_capability_model
 
@@ -56,6 +56,23 @@ def image_model(model_id: str = "image") -> dict:
     }
 
 
+def video_model(model_id: str = "video") -> dict:
+    return {
+        "id": model_id,
+        "name": "视频模型",
+        "model": "video-model",
+        "provider": "openai_video",
+        "api_key_env": "TEST_VIDEO_KEY",
+        "enabled": 1,
+        "config": json.dumps(
+            {
+                "supports_video_generation": True,
+                "capabilities": ["video.generate"],
+            }
+        ),
+    }
+
+
 class CapabilityTests(unittest.TestCase):
     def test_capability_routes_to_declared_model_and_persists_override(self):
         store = FakeStore([image_model()])
@@ -85,6 +102,29 @@ class CapabilityTests(unittest.TestCase):
 
     def test_image_generation_without_model_returns_controlled_failure(self):
         result = asyncio.run(generate_image(FakeStore([]), tempfile.mkdtemp(), "一只猫"))
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["retryable"])
+
+    def test_video_generation_writes_workspace_artifact(self):
+        store = FakeStore([video_model()])
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("backend.capability_executor._request_video", return_value=b"mp4"):
+                result = asyncio.run(
+                    generate_video(
+                        store,
+                        directory,
+                        "一只猫在海边奔跑",
+                        output_filename="cat.mp4",
+                    )
+                )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["artifact_path"], "outputs/cat.mp4")
+            self.assertEqual(
+                (Path(directory) / result["artifact_path"]).read_bytes(), b"mp4"
+            )
+
+    def test_video_generation_without_model_returns_controlled_failure(self):
+        result = asyncio.run(generate_video(FakeStore([]), tempfile.mkdtemp(), "一只猫"))
         self.assertFalse(result["ok"])
         self.assertFalse(result["retryable"])
 

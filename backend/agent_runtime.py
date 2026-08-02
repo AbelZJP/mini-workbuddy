@@ -151,6 +151,7 @@ async def run_agentscope(
     skill_script_roots: dict[str, str] | None = None,
     reference_file: str = "",
     capability_store: Any | None = None,
+    worker_mode: bool = False,
 ) -> tuple[str, list[dict[str, Any]]] | None:
     """Run one turn through the installed AgentScope runtime.
 
@@ -228,6 +229,33 @@ async def run_agentscope(
         max_retries=5,
         retry_delay=2.0,
     )
+
+    if worker_mode:
+        worker = Agent(
+            name="mini-workbuddy-expert-worker",
+            system_prompt=(
+                "你是专家团中的一个独立专家 Worker。只负责从自己的专业视角分析当前子任务，"
+                "不要假设自己是最终协调者，不要修改文件，不要调用外部工具。\n"
+                f"<expert_role>\n{expert_prompt}\n</expert_role>\n"
+                f"<task_context>\n{context[-12000:]}\n</task_context>\n"
+                "请给出可供协调 Agent 直接使用的结论、依据、风险和建议，控制在必要长度内。"
+            ),
+            model=model,
+            toolkit=Toolkit(tools=[]),
+            react_config=ReActConfig(),
+        )
+        message = Msg(
+            name="user",
+            content=[TextBlock(text=content[:16000])],
+            role="user",
+        )
+        final_msg = None
+        async for event in worker.reply_stream(message, yield_final_msg=True):
+            if isinstance(event, Msg):
+                final_msg = event
+        if final_msg is None:
+            raise RuntimeError("专家 Worker 未返回最终结果")
+        return _text_from_reply(final_msg), []
 
     mcp_clients: list[Any] = []
     toolkit_kwargs: dict[str, Any] = {}

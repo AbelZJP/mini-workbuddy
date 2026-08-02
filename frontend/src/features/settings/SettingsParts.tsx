@@ -21,6 +21,10 @@ export function ModelModal({
     enabled: model?.enabled ?? true,
     supports_vision: model?.supports_vision ?? false,
     supports_image_generation: model?.supports_image_generation ?? false,
+    supports_video_generation: model?.supports_video_generation ?? false,
+    video_endpoint: model?.video_endpoint || "",
+    video_status_endpoint: model?.video_status_endpoint || "",
+    video_content_endpoint: model?.video_content_endpoint || "",
   });
   const editing = Boolean(model);
   const update = (key: string, value: string) =>
@@ -42,6 +46,9 @@ export function ModelModal({
           ["model", "Model ID"],
           ["base_url", "Base URL"],
           ["api_key_env", "API Key 环境变量"],
+          ["video_endpoint", "视频创建接口（可选）"],
+          ["video_status_endpoint", "视频状态接口（可选）"],
+          ["video_content_endpoint", "视频内容接口（可选）"],
         ].map(([key, label]) => (
           <label key={key}>
             {label}
@@ -51,8 +58,9 @@ export function ModelModal({
             />
           </label>
         ))}
-        <label>
+        <label className="model-capability-option">
           <input
+            className="model-capability-checkbox"
             type="checkbox"
             checked={form.supports_vision}
             onChange={(event) =>
@@ -61,11 +69,12 @@ export function ModelModal({
                 supports_vision: event.target.checked,
               }))
             }
-          />{" "}
-          支持图片理解
+          />
+          <span>支持图片理解</span>
         </label>
-        <label>
+        <label className="model-capability-option">
           <input
+            className="model-capability-checkbox"
             type="checkbox"
             checked={form.supports_image_generation}
             onChange={(event) =>
@@ -74,11 +83,25 @@ export function ModelModal({
                 supports_image_generation: event.target.checked,
               }))
             }
-          />{' '}
-          支持图片生成
+          />
+          <span>支持图片生成</span>
+        </label>
+        <label className="model-capability-option">
+          <input
+            className="model-capability-checkbox"
+            type="checkbox"
+            checked={form.supports_video_generation}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                supports_video_generation: event.target.checked,
+              }))
+            }
+          />
+          <span>支持视频生成</span>
         </label>
         <p className="modal-note">
-          图片理解和图片生成是两项独立能力，请根据模型实际 API 能力分别勾选。
+          图片理解、图片生成和视频生成是独立能力，请根据模型实际 API 能力分别勾选。
         </p>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose}>

@@ -45,6 +45,15 @@ registry.register(
         output_type="image",
     )
 )
+registry.register(
+    CapabilityDefinition(
+        id="video.generate",
+        name="视频生成",
+        description="根据文字提示生成视频并保存到当前工作空间。",
+        model_capability="video.generate",
+        output_type="video",
+    )
+)
 
 
 def capability_rows(store: Any) -> list[dict[str, Any]]:

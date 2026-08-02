@@ -108,6 +108,12 @@ export function SettingsPage({
                 <h2>已配置模型</h2>
                 <p>模型配置持久化到 SQLite；API Key 通过环境变量读取。</p>
               </div>
+              <button
+                className="dashed-button model-add-button"
+                onClick={() => setEditingModel(null)}
+              >
+                ＋ 添加 OpenAI 兼容模型
+              </button>
               {models.map((model) => (
                 <div className="model-row" key={model.id}>
                   <div className="model-badge">◉</div>
@@ -176,12 +182,6 @@ export function SettingsPage({
                   </div>
                 ))}
               </div>
-              <button
-                className="dashed-button"
-                onClick={() => setEditingModel(null)}
-              >
-                ＋ 添加 OpenAI 兼容模型
-              </button>
             </div>
           )}
           {tab === "permissions" && (

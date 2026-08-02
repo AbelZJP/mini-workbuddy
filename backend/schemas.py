@@ -38,6 +38,10 @@ class ModelConfig(BaseModel):
     enabled: bool = True
     supports_vision: bool = False
     supports_image_generation: bool = False
+    supports_video_generation: bool = False
+    video_endpoint: str = ""
+    video_status_endpoint: str = ""
+    video_content_endpoint: str = ""
     is_default: bool = False
 
 
@@ -94,3 +98,56 @@ class MemoryRequest(BaseModel):
 class SkillHubInstallRequest(BaseModel):
     coordinate: str = Field(min_length=1, max_length=200)
     version: str = ""
+
+
+class CanvasGraph(BaseModel):
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    viewport: dict[str, float] = Field(default_factory=lambda: {"x": 0, "y": 0, "zoom": 1})
+
+
+class CanvasProject(BaseModel):
+    id: str
+    workspace_id: str
+    name: str
+    graph: CanvasGraph
+    created_at: str
+    updated_at: str
+
+
+class CreateCanvasProject(BaseModel):
+    workspace_id: str
+    name: str = "未命名项目"
+    graph: CanvasGraph = Field(default_factory=CanvasGraph)
+
+
+class UpdateCanvasProject(BaseModel):
+    name: str | None = None
+    graph: CanvasGraph | None = None
+
+
+class CanvasPolishRequest(BaseModel):
+    model_id: str = ""
+    content: str = Field(min_length=1, max_length=12000)
+
+
+class CanvasGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    model_id: str = ""
+    ratio: str = "1:1"
+    duration: str = "5s"
+    resolution: str = "1080p"
+    audio: str = "有声"
+
+
+class CanvasContextReference(BaseModel):
+    source_node_id: str
+    scope: str
+    title: str
+    content: str
+
+
+class CanvasContextResponse(BaseModel):
+    node_id: str
+    references: list[CanvasContextReference] = Field(default_factory=list)
+    context: str = ""

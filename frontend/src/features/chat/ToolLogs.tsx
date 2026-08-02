@@ -55,6 +55,8 @@ export function ToolLogs({ logs }: { logs?: ToolLog[] }) {
                     ? "MCP"
                     : log.kind === "skill"
                       ? "Skill"
+                      : log.kind === "expert"
+                        ? "专家"
                       : "工具"}
                 </span>
                 <strong>{log.name}</strong>

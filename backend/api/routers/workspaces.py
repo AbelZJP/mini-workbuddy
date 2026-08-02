@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from ...core import *
 from ...services.workspace_service import workspace_row
 
@@ -93,6 +94,20 @@ async def upload_workspace_files(
             }
         )
     return {"files": uploaded}
+
+
+@router.get("/api/workspaces/{workspace_id}/files/{file_path:path}")
+async def preview_workspace_file(workspace_id: str, file_path: str):
+    workspace = store.one("workspaces", "id=?", (workspace_id,))
+    if not workspace:
+        raise HTTPException(404, "工作空间不存在")
+    root = Path(workspace["root_path"]).expanduser().resolve()
+    target = (root / file_path).resolve()
+    if target != root and root not in target.parents:
+        raise HTTPException(400, "文件路径不在当前工作空间内")
+    if not target.is_file():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(target)
 
 
 @router.post("/api/workspaces/import", response_model=Workspace)

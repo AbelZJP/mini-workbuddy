@@ -1,9 +1,17 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, json } from "./api";
-import type { Attachment, Message, Model, Task, Workspace } from "./types";
+import type {
+  Attachment,
+  CanvasProject,
+  Message,
+  Model,
+  Task,
+  Workspace,
+} from "./types";
 import { Chat } from "../features/chat/Chat";
 import { SkillsPage } from "../features/skills/SkillsPage";
 import { ExpertsPage } from "../features/experts/ExpertsPage";
+import { CanvasPage } from "../features/canvas/CanvasPage";
 import { McpPage } from "../features/mcp/McpPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import {
@@ -17,10 +25,14 @@ import { useWorkspaceTasks } from "./hooks/useWorkspaceTasks";
 
 export function App() {
   const [section, setSection] = useState<
-    "chat" | "skills" | "experts" | "mcp" | "settings"
+    "chat" | "skills" | "experts" | "canvas" | "mcp" | "settings"
   >("chat");
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("default");
+  const [canvasProjectsByWorkspace, setCanvasProjectsByWorkspace] = useState<
+    Record<string, CanvasProject[]>
+  >({});
+  const [canvasProjectId, setCanvasProjectId] = useState("");
   const [tasksByWorkspace, setTasksByWorkspace] = useState<
     Record<string, Task[]>
   >({});
@@ -40,6 +52,9 @@ export function App() {
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<
     Record<string, boolean>
   >({});
+  const [workspaceListCollapsed, setWorkspaceListCollapsed] = useState(false);
+  const [canvasProjectListCollapsed, setCanvasProjectListCollapsed] =
+    useState(false);
   const workspace = useMemo(
     () => workspaces.find((item) => item.id === workspaceId),
     [workspaces, workspaceId],
@@ -49,6 +64,33 @@ export function App() {
     () => tasks.find((item) => item.id === taskId),
     [tasks, taskId],
   );
+  const canvasProjects = canvasProjectsByWorkspace[workspaceId] || [];
+  const handleCanvasProjectsChange = useCallback(
+    (items: CanvasProject[]) => {
+      setCanvasProjectsByWorkspace((current) => ({
+        ...current,
+        [workspaceId]: items,
+      }));
+    },
+    [workspaceId],
+  );
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    json<CanvasProject[]>(
+      `/api/canvas/projects?workspace_id=${encodeURIComponent(workspaceId)}`,
+    )
+      .then((items) => {
+        setCanvasProjectsByWorkspace((current) => ({
+          ...current,
+          [workspaceId]: items,
+        }));
+        setCanvasProjectId((current) =>
+          items.some((item) => item.id === current) ? current : items[0]?.id || "",
+        );
+      })
+      .catch((reason) => setError(`读取画布项目失败：${String(reason)}`));
+  }, [workspaceId]);
 
   const { refresh } = useAppBootstrap({
     workspaceId,
@@ -118,6 +160,33 @@ export function App() {
       setError(String(e));
     }
   };
+  const createCanvasProject = async (targetWorkspaceId = workspaceId) => {
+    if (!targetWorkspaceId) return;
+    try {
+      const created = await json<CanvasProject>("/api/canvas/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: targetWorkspaceId,
+          name: "未命名项目",
+          graph: { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
+        }),
+      });
+      setCanvasProjectsByWorkspace((current) => ({
+        ...current,
+        [targetWorkspaceId]: [
+          created,
+          ...(current[targetWorkspaceId] || []).filter(
+            (item) => item.id !== created.id,
+          ),
+        ],
+      }));
+      setWorkspaceId(targetWorkspaceId);
+      setCanvasProjectId(created.id);
+      setSection("canvas");
+    } catch (reason) {
+      setError(`新建画布项目失败：${String(reason)}`);
+    }
+  };
   const deleteWorkspace = async (item: Workspace) => {
     if (
       item.id === "default" ||
@@ -180,12 +249,31 @@ export function App() {
           >
             <span className="nav-icon">◎</span>专家库
           </button>
+          <button
+            className={section === "canvas" ? "active" : ""}
+            onClick={() => setSection("canvas")}
+          >
+            <span className="nav-icon">⌘</span>无限画布
+          </button>
         </nav>
         <div className="workspace-label">
-          <span>工作空间</span>
-          <button onClick={() => setShowCreate(true)}>＋</button>
+          <button
+            className="sidebar-section-toggle"
+            onClick={() => setWorkspaceListCollapsed((current) => !current)}
+          >
+            <span className="sidebar-section-chevron">
+              {workspaceListCollapsed ? "›" : "⌄"}
+            </span>
+            <span>工作空间</span>
+          </button>
+          <button
+            title="新建工作空间"
+            onClick={() => setShowCreate(true)}
+          >
+            ＋
+          </button>
         </div>
-        <div className="workspace-list">
+        {!workspaceListCollapsed && <div className="workspace-list">
           {workspaces.map((item) => {
             const collapsed = Boolean(collapsedWorkspaces[item.id]);
             const itemTasks = tasksByWorkspace[item.id] || [];
@@ -255,7 +343,51 @@ export function App() {
               </div>
             );
           })}
+        </div>}
+        <div className="canvas-project-label">
+          <button
+            className="sidebar-section-toggle"
+            onClick={() =>
+              setCanvasProjectListCollapsed((current) => !current)
+            }
+          >
+            <span className="sidebar-section-chevron">
+              {canvasProjectListCollapsed ? "›" : "⌄"}
+            </span>
+            <span>画布项目</span>
+          </button>
+          <button
+            title="新建画布项目"
+            onClick={() => void createCanvasProject()}
+          >
+            ＋
+          </button>
         </div>
+        {!canvasProjectListCollapsed && <div className="canvas-project-list">
+          {canvasProjects.length ? (
+            canvasProjects.map((project) => (
+              <button
+                key={project.id}
+                className={`canvas-project-item ${section === "canvas" && project.id === canvasProjectId ? "selected" : ""}`}
+                title={`打开画布项目 ${project.name}`}
+                onClick={() => {
+                  setCanvasProjectId(project.id);
+                  setSection("canvas");
+                }}
+              >
+                <span className="canvas-project-dot">⌘</span>
+                <span>{project.name}</span>
+              </button>
+            ))
+          ) : (
+            <button
+              className="canvas-project-empty"
+              onClick={() => void createCanvasProject()}
+            >
+              ＋ 新建第一个画布
+            </button>
+          )}
+        </div>}
         <div className="sidebar-footer">
           <button
             onClick={() => setSection("settings")}
@@ -307,6 +439,14 @@ export function App() {
         )}
         {section === "skills" && <SkillsPage />}
         {section === "experts" && <ExpertsPage />}
+        {section === "canvas" && (
+          <CanvasPage
+            workspaceId={workspaceId}
+            projectId={canvasProjectId}
+            onProjectSelected={setCanvasProjectId}
+            onProjectsChange={handleCanvasProjectsChange}
+          />
+        )}
         {section === "mcp" && <McpPage />}
         {section === "settings" && (
           <SettingsPage models={models} refresh={refresh} />

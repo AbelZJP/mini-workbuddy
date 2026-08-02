@@ -15,7 +15,7 @@ type WorkspaceTasksOptions = {
   setAttachments: React.Dispatch<React.SetStateAction<Attachment[]>>;
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   setSection: (
-    value: "chat" | "skills" | "experts" | "mcp" | "settings",
+    value: "chat" | "skills" | "experts" | "canvas" | "mcp" | "settings",
   ) => void;
   setError: (value: string) => void;
 };

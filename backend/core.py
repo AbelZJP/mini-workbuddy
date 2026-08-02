@@ -400,13 +400,13 @@ def validate_skill_version(version: str) -> str:
     return value
 
 
-def selected_expert_prompt(expert_ids: list[str]) -> str:
-    """Load only task-installed expert prompts from the app-owned directory."""
+def selected_expert_prompt_sections(expert_ids: list[str]) -> list[dict[str, str]]:
+    """Load selected expert prompts as independent sections for single/team modes."""
     if not expert_ids:
-        return ""
+        return []
     installed_root = (EXPERTS_ROOT / "installed").resolve()
     rows = {row["id"]: row for row in store.all("experts", "installed=1 AND enabled=1")}
-    sections: list[str] = []
+    sections: list[dict[str, str]] = []
     for expert_id in expert_ids:
         row = rows.get(expert_id)
         if not row:
@@ -418,8 +418,18 @@ def selected_expert_prompt(expert_ids: list[str]) -> str:
             continue
         content = path.read_text(encoding="utf-8", errors="ignore").strip()
         if content:
-            sections.append(f"## 专家：{row['name']}\n{content}")
-    return "\n\n".join(sections)
+            sections.append(
+                {"id": str(expert_id), "name": str(row["name"]), "prompt": content}
+            )
+    return sections
+
+
+def selected_expert_prompt(expert_ids: list[str]) -> str:
+    """Keep the legacy single-Agent prompt format for one-expert tasks."""
+    return "\n\n".join(
+        f"## 专家：{section['name']}\n{section['prompt']}"
+        for section in selected_expert_prompt_sections(expert_ids)
+    )
 
 
 def register_task_artifacts(
@@ -477,6 +487,13 @@ def model_row(row: dict[str, Any]) -> ModelConfig:
             config.get("supports_image_generation", False)
             or "image.generate" in (config.get("capabilities") or [])
         ),
+        supports_video_generation=bool(
+            config.get("supports_video_generation", False)
+            or "video.generate" in (config.get("capabilities") or [])
+        ),
+        video_endpoint=str(config.get("video_endpoint") or ""),
+        video_status_endpoint=str(config.get("video_status_endpoint") or ""),
+        video_content_endpoint=str(config.get("video_content_endpoint") or ""),
         is_default=row["id"] == default_model_id(),
     )
 

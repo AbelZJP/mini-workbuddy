@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter
 from ...core import *
+from ...expert_team import run_expert_team
 from ...services.task_service import task_row, task_title_from_message
 
 from .memory import compact_task
@@ -103,6 +106,14 @@ async def send_message(task_id: str, payload: MessageRequest, request: Request):
         for item in task_capabilities.selected_expert_ids
         if item in installed_experts
     ]
+    expert_sections = selected_expert_prompt_sections(
+        task_capabilities.selected_expert_ids
+    )
+    expert_team_mode = (
+        len(expert_sections) >= 2
+        and os.getenv("AGENTSCOPE_LIVE", "0") == "1"
+        and payload.model_id != "demo"
+    )
     context = (
         ("相关记忆：" + "；".join(row["content"] for row in memories))
         if memories
@@ -156,6 +167,7 @@ async def send_message(task_id: str, payload: MessageRequest, request: Request):
         "context": context,
         "selected_skill_ids": task_capabilities.selected_skill_ids,
         "selected_expert_ids": task_capabilities.selected_expert_ids,
+        "expert_mode": "team" if expert_team_mode else "single",
         "reference_file": reference_file,
     }
     store.insert(
@@ -239,12 +251,79 @@ async def send_message(task_id: str, payload: MessageRequest, request: Request):
                     },
                 )
                 yield sse({"type": "task.started", "task_id": task_id})
+                runtime_context = context
+                runtime_expert_prompt = (
+                    selected_expert_prompt(task_capabilities.selected_expert_ids)
+                    if not expert_team_mode
+                    else ""
+                )
+                if expert_team_mode:
+                    for expert in expert_sections:
+                        yield sse(
+                            {
+                                "type": "tool.started",
+                                "log": merge_tool_log(
+                                    {
+                                        "id": f"expert:{expert['id']}",
+                                        "name": f"专家分析：{expert['name']}",
+                                        "kind": "expert",
+                                        "status": "running",
+                                        "input": payload.content,
+                                        "output": "",
+                                    }
+                                ),
+                            }
+                        )
+                    try:
+                        expert_results = await asyncio.wait_for(
+                            run_expert_team(
+                                model,
+                                runtime_content,
+                                context,
+                                expert_sections,
+                            ),
+                            timeout=min(agent_run_timeout_seconds(), 600),
+                        )
+                    except asyncio.TimeoutError:
+                        expert_results = [
+                            {
+                                "id": expert["id"],
+                                "name": expert["name"],
+                                "status": "failed",
+                                "output": "专家 Worker 执行超过 600 秒，已停止本轮专家分析。",
+                            }
+                            for expert in expert_sections
+                        ]
+                    result_sections = []
+                    for result in expert_results:
+                        log = merge_tool_log(
+                            {
+                                "id": f"expert:{result['id']}",
+                                "name": f"专家分析：{result['name']}",
+                                "kind": "expert",
+                                "status": result["status"],
+                                "input": payload.content,
+                                "output": result["output"],
+                            }
+                        )
+                        yield sse({"type": "tool.completed", "log": log})
+                        result_sections.append(
+                            f"## {result['name']}（{result['status']}）\n{result['output']}"
+                        )
+                    team_context = (
+                        "\n\n本轮专家团已分别完成分析。你是最终协调 Agent，"
+                        "请综合以下结果回答用户；不要重新输出专家 Prompt，也不要把彼此冲突的建议当成已确认事实。\n"
+                        "<expert_team_results>\n"
+                        + "\n\n".join(result_sections)
+                        + "\n</expert_team_results>"
+                    )
+                    runtime_context += team_context[:24000]
                 runtime_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
                 live_task = asyncio.create_task(
                     run_agentscope(
                         model,
                         runtime_content,
-                        context,
+                        runtime_context,
                         build_skill_prompt(
                             ROOT / "skills",
                             {row["id"] for row in skill_rows},
@@ -252,7 +331,7 @@ async def send_message(task_id: str, payload: MessageRequest, request: Request):
                             if workspace
                             else None,
                         ),
-                        selected_expert_prompt(task_capabilities.selected_expert_ids),
+                        runtime_expert_prompt,
                         mcp_rows,
                         workspace_root=workspace["root_path"] if workspace else "",
                         permission_mode=payload.permission_mode,

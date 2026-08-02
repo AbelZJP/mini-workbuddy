@@ -25,6 +25,8 @@ def model_capabilities(row: dict[str, Any]) -> set[str]:
         capabilities.add("vision.input")
     if config.get("supports_image_generation"):
         capabilities.add("image.generate")
+    if config.get("supports_video_generation"):
+        capabilities.add("video.generate")
     return capabilities
 
 

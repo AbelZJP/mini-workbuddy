@@ -124,7 +124,7 @@ async def create_model(payload: ModelConfig):
     row = {
         key: value
         for key, value in payload.model_dump().items()
-        if key not in {"supports_vision", "supports_image_generation", "is_default"}
+        if key not in {"supports_vision", "supports_image_generation", "supports_video_generation", "video_endpoint", "video_status_endpoint", "video_content_endpoint", "is_default"}
     }
     row.update(
         {
@@ -133,10 +133,15 @@ async def create_model(payload: ModelConfig):
                 {
                     "supports_vision": payload.supports_vision,
                     "supports_image_generation": payload.supports_image_generation,
+                    "supports_video_generation": payload.supports_video_generation,
+                    "video_endpoint": payload.video_endpoint,
+                    "video_status_endpoint": payload.video_status_endpoint,
+                    "video_content_endpoint": payload.video_content_endpoint,
                     "capabilities": (
                         ["vision.input"] if payload.supports_vision else []
                     )
-                    + (["image.generate"] if payload.supports_image_generation else []),
+                    + (["image.generate"] if payload.supports_image_generation else [])
+                    + (["video.generate"] if payload.supports_video_generation else []),
                 }
             ),
         }
@@ -150,7 +155,7 @@ async def update_model(model_id: str, payload: ModelConfig):
     row = {
         key: value
         for key, value in payload.model_dump().items()
-        if key not in {"supports_vision", "supports_image_generation", "is_default"}
+        if key not in {"supports_vision", "supports_image_generation", "supports_video_generation", "video_endpoint", "video_status_endpoint", "video_content_endpoint", "is_default"}
     }
     row.update(
         {
@@ -159,10 +164,15 @@ async def update_model(model_id: str, payload: ModelConfig):
                 {
                     "supports_vision": payload.supports_vision,
                     "supports_image_generation": payload.supports_image_generation,
+                    "supports_video_generation": payload.supports_video_generation,
+                    "video_endpoint": payload.video_endpoint,
+                    "video_status_endpoint": payload.video_status_endpoint,
+                    "video_content_endpoint": payload.video_content_endpoint,
                     "capabilities": (
                         ["vision.input"] if payload.supports_vision else []
                     )
-                    + (["image.generate"] if payload.supports_image_generation else []),
+                    + (["image.generate"] if payload.supports_image_generation else [])
+                    + (["video.generate"] if payload.supports_video_generation else []),
                 }
             ),
         }
