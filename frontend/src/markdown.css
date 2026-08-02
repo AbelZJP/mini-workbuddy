@@ -1,0 +1,6 @@
+.markdown-table{width:100%;margin:12px 0;border-collapse:separate;border-spacing:0;overflow:hidden;border:1px solid #e6e0d7;border-radius:8px;background:#fffefa;font-size:12px;line-height:1.6}
+.markdown-table th,.markdown-table td{padding:8px 10px;border-right:1px solid #ece7df;border-bottom:1px solid #ece7df;text-align:left;vertical-align:top}
+.markdown-table th{background:#f5f1eb;color:#4d4840;font-weight:800}
+.markdown-table tr:last-child td{border-bottom:0}
+.markdown-table th:last-child,.markdown-table td:last-child{border-right:0}
+.markdown-table td code,.markdown-table th code{font-size:11px}
