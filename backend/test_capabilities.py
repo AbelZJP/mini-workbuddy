@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .capability_executor import generate_image, generate_video
+from .capability_executor import _request_video, generate_image, generate_video
 from .capability_registry import capability_rows
 from .model_router import route_model, set_capability_model
 
@@ -74,6 +74,65 @@ def video_model(model_id: str = "video") -> dict:
 
 
 class CapabilityTests(unittest.TestCase):
+    def test_dashscope_video_uses_async_contract_and_nested_result(self):
+        class FakeResponse:
+            def __init__(self, body: bytes, content_type: str = "application/json"):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        model = {
+            "id": "kling",
+            "name": "可灵视频",
+            "model": "kling/kling-v3-video-generation",
+            "provider": "openai_compatible",
+            "base_url": "https://llm-test.cn-beijing.maas.aliyuncs.com",
+            "api_key_env": "TEST_VIDEO_KEY",
+            "config": json.dumps(
+                {
+                    "video_poll_interval_seconds": 1,
+                }
+            ),
+        }
+        responses = [
+            FakeResponse(
+                json.dumps({"output": {"task_id": "task-123", "task_status": "PENDING"}}).encode()
+            ),
+            FakeResponse(
+                json.dumps(
+                    {
+                        "output": {
+                            "task_id": "task-123",
+                            "task_status": "SUCCEEDED",
+                            "video_url": "https://result.example/video.mp4",
+                        }
+                    }
+                ).encode()
+            ),
+            FakeResponse(b"mp4", "video/mp4"),
+        ]
+        with patch.dict("os.environ", {"TEST_VIDEO_KEY": "sk-test"}, clear=False):
+            with patch("backend.capability_executor.urllib.request.urlopen", side_effect=responses) as urlopen:
+                result = _request_video(model, "小猫在月光下奔跑", "16:9", "5s", "1080p", "无声")
+
+        self.assertEqual(result, b"mp4")
+        create_request = urlopen.call_args_list[0].args[0]
+        self.assertEqual(create_request.get_header("X-dashscope-async"), "enable")
+        payload = json.loads(create_request.data.decode())
+        self.assertEqual(payload["input"]["prompt"], "小猫在月光下奔跑")
+        self.assertEqual(payload["parameters"]["duration"], 5)
+        self.assertEqual(urlopen.call_args_list[1].args[0].full_url, "https://llm-test.cn-beijing.maas.aliyuncs.com/api/v1/tasks/task-123")
+        self.assertIsNone(urlopen.call_args_list[1].args[0].get_header("X-dashscope-async"))
+        self.assertEqual(urlopen.call_args_list[2].args[0].full_url, "https://result.example/video.mp4")
+
     def test_capability_routes_to_declared_model_and_persists_override(self):
         store = FakeStore([image_model()])
         self.assertEqual(route_model(store, "image.generate")["id"], "image")

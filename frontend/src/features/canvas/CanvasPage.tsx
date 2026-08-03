@@ -43,10 +43,16 @@ type CanvasNodeData = {
   onPolish?: (id: string) => void;
   onGenerate?: (id: string) => void;
   onQuickAdd?: (sourceId: string, kind: CanvasNodeKind) => void;
+  onFrameImage?: (sourceId: string, time: number) => void;
+  previewUrl?: string;
 };
 type CanvasNode = Node<CanvasNodeData, CanvasNodeKind>;
 type CanvasEdge = Edge;
 type PersistedNode = CanvasGraph["nodes"][number];
+type FramePreview = { time: number; url: string };
+
+const PREVIEW_FRAME_RATE = 1;
+const MAX_FRAME_PREVIEWS = 180;
 
 const NODE_META: Record<
   CanvasNodeKind,
@@ -112,7 +118,7 @@ const DEFAULT_CONFIG: Record<CanvasNodeKind, Record<string, string>> = {
 function makeNode(
   kind: CanvasNodeKind,
   position: { x: number; y: number },
-  actions?: Pick<CanvasNodeData, "models" | "onChange" | "onRemove" | "onUpload" | "onPolish" | "onGenerate" | "onQuickAdd">,
+  actions?: Pick<CanvasNodeData, "models" | "onChange" | "onRemove" | "onUpload" | "onPolish" | "onGenerate" | "onQuickAdd" | "onFrameImage">,
 ): CanvasNode {
   const meta = NODE_META[kind];
   return {
@@ -306,9 +312,161 @@ function TextNode(props: NodeProps<CanvasNode>) {
   );
 }
 
+function formatFrameTime(time: number) {
+  const minutes = Math.floor(time / 60);
+  const seconds = time % 60;
+  return `${String(minutes).padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
+}
+
+function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadedmetadata" | "seeked") {
+  return new Promise<void>((resolve, reject) => {
+    const done = () => {
+      cleanup();
+      resolve();
+    };
+    const failed = () => {
+      cleanup();
+      reject(new Error("视频帧读取失败"));
+    };
+    const cleanup = () => {
+      video.removeEventListener(eventName, done);
+      video.removeEventListener("error", failed);
+    };
+    video.addEventListener(eventName, done, { once: true });
+    video.addEventListener("error", failed, { once: true });
+  });
+}
+
+async function loadFrameVideo(url: string) {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.src = url;
+  if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
+    await waitForVideoEvent(video, "loadedmetadata");
+  }
+  return video;
+}
+
+async function captureVideoFrame(video: HTMLVideoElement, time: number, maxEdge: number) {
+  const safeTime = Math.min(Math.max(time, 0.001), Math.max(video.duration - 0.001, 0.001));
+  if (Math.abs(video.currentTime - safeTime) > 0.0001) {
+    video.currentTime = safeTime;
+    await waitForVideoEvent(video, "seeked");
+  }
+  const scale = Math.min(1, maxEdge / Math.max(video.videoWidth || maxEdge, video.videoHeight || maxEdge));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round((video.videoWidth || maxEdge) * scale));
+  canvas.height = Math.max(1, Math.round((video.videoHeight || maxEdge) * scale));
+  canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("无法生成视频帧图片"))), "image/jpeg", 0.9);
+  });
+}
+
+function VideoFramePreview({
+  videoUrl,
+  onFrameImage,
+}: {
+  videoUrl: string;
+  onFrameImage: (time: number) => void;
+}) {
+  const [mode, setMode] = useState<"frame" | "15s" | "30s" | "custom">("frame");
+  const [customSeconds, setCustomSeconds] = useState("5");
+  const [frames, setFrames] = useState<FramePreview[]>([]);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [total, setTotal] = useState(0);
+
+  const interval = mode === "frame"
+    ? 1 / PREVIEW_FRAME_RATE
+    : mode === "15s"
+      ? 15
+      : mode === "30s"
+        ? 30
+        : Math.max(Number(customSeconds) || 1, 0.1);
+
+  useEffect(() => {
+    let cancelled = false;
+    const urls: string[] = [];
+    setFrames([]);
+    setState("loading");
+    setTotal(0);
+    const createFrames = async () => {
+      try {
+        const video = await loadFrameVideo(videoUrl);
+        if (!Number.isFinite(video.duration) || video.duration <= 0) throw new Error("视频时长无效");
+        const times: number[] = [];
+        for (let time = 0; time < video.duration; time += interval) times.push(time);
+        if (!times.length) times.push(0);
+        setTotal(times.length);
+        const previewTimes = times.slice(0, MAX_FRAME_PREVIEWS);
+        for (const time of previewTimes) {
+          if (cancelled) return;
+          const blob = await captureVideoFrame(video, time, 260);
+          const url = URL.createObjectURL(blob);
+          urls.push(url);
+          if (!cancelled) setFrames((current) => [...current, { time, url }]);
+        }
+        if (!cancelled) setState("ready");
+      } catch {
+        if (!cancelled) setState("error");
+      }
+    };
+    void createFrames();
+    return () => {
+      cancelled = true;
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [interval, videoUrl]);
+
+  return (
+    <div className="canvas-frame-preview" onPointerDown={(event) => event.stopPropagation()}>
+      <div className="canvas-frame-preview-head">
+        <span>按帧预览</span>
+        <em>{state === "loading" ? "抽帧中…" : state === "error" ? "抽帧失败" : `${frames.length} 张`}</em>
+      </div>
+      <div className="canvas-frame-options" role="group" aria-label="视频抽帧间隔">
+        {([
+          ["frame", "每秒"],
+          ["15s", "15s"],
+          ["30s", "30s"],
+          ["custom", "自定义"],
+        ] as const).map(([value, label]) => (
+          <button key={value} className={mode === value ? "active" : ""} type="button" onClick={() => setMode(value)}>{label}</button>
+        ))}
+        {mode === "custom" && <label className="canvas-frame-custom"><input type="number" min="0.1" step="0.1" value={customSeconds} onChange={(event) => setCustomSeconds(event.target.value)} />s</label>}
+      </div>
+      {total > MAX_FRAME_PREVIEWS && <p className="canvas-frame-limit">为保持画布流畅，当前展示前 {MAX_FRAME_PREVIEWS} / {total} 帧。</p>}
+      <div
+        className="canvas-frame-list nowheel"
+        aria-live="polite"
+        onWheel={(event) => {
+          const list = event.currentTarget;
+          if (list.scrollWidth <= list.clientWidth) return;
+          const delta = event.deltaY || event.deltaX;
+          if (!delta) return;
+          event.preventDefault();
+          event.stopPropagation();
+          list.scrollLeft += delta;
+        }}
+      >
+        {frames.map((frame) => (
+          <div className="canvas-frame-item" key={`${frame.time}-${frame.url}`}>
+            <img src={frame.url} alt={`${formatFrameTime(frame.time)} 视频帧`} />
+            <span>{formatFrameTime(frame.time)}</span>
+            <button type="button" title="以这一帧创建图片上传节点" onClick={() => onFrameImage(frame.time)}>＋图片</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function UploadNode(props: NodeProps<CanvasNode>) {
   const { data, id } = props;
   const isVideo = data.kind === "video-upload";
+  const mediaUrl = data.config.fileUrl || data.previewUrl;
   const clearFile = () => data.onChange?.(id, {
     fileName: "",
     filePath: "",
@@ -329,13 +487,13 @@ function UploadNode(props: NodeProps<CanvasNode>) {
   );
   return (
     <NodeShell {...props}>
-      {data.config.fileUrl ? (
+      {mediaUrl ? (
         <>
           <div className={`canvas-media-preview ${isVideo ? "video" : "image"}`} onPointerDown={(event) => event.stopPropagation()}>
             {isVideo ? (
-              <video src={data.config.fileUrl} controls preload="metadata" />
+              <video src={mediaUrl} controls preload="metadata" />
             ) : (
-              <img src={data.config.fileUrl} alt={data.config.fileName || "已上传图片"} />
+              <img src={mediaUrl} alt={data.config.fileName || "已上传图片"} />
             )}
             {!isVideo && (
               <div className="canvas-media-overlay">
@@ -345,10 +503,13 @@ function UploadNode(props: NodeProps<CanvasNode>) {
             )}
           </div>
           {isVideo && (
-            <div className="canvas-media-actions" onPointerDown={(event) => event.stopPropagation()}>
-              <label className="canvas-media-action">换文件{fileInput}</label>
-              <button className="canvas-media-action danger" type="button" onClick={clearFile}>删除</button>
-            </div>
+            <>
+              <div className="canvas-media-actions" onPointerDown={(event) => event.stopPropagation()}>
+                <label className="canvas-media-action">换文件{fileInput}</label>
+                <button className="canvas-media-action danger" type="button" onClick={clearFile}>删除</button>
+              </div>
+              {data.config.fileUrl && <VideoFramePreview videoUrl={data.config.fileUrl} onFrameImage={(time) => data.onFrameImage?.(id, time)} />}
+            </>
           )}
           <div className="canvas-file-name" title={data.config.fileName}>{data.config.fileName}</div>
         </>
@@ -472,6 +633,7 @@ function CanvasEditor({
   const projectsRef = useRef<CanvasProject[]>([]);
   const onProjectsChangeRef = useRef(onProjectsChange);
   const quickAddRef = useRef<(sourceId: string, kind: CanvasNodeKind) => void>(() => undefined);
+  const frameImageRef = useRef<(sourceId: string, time: number) => void>(() => undefined);
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -490,6 +652,7 @@ function CanvasEditor({
   const actions = useMemo(() => ({
     models,
     onQuickAdd: (sourceId: string, kind: CanvasNodeKind) => quickAddRef.current(sourceId, kind),
+    onFrameImage: (sourceId: string, time: number) => frameImageRef.current(sourceId, time),
     onChange: (id: string, patch: Record<string, string>) => {
       setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, ...patch } } } : node));
       setSaveState("dirty");
@@ -509,7 +672,7 @@ function CanvasEditor({
         if (!response.ok) throw new Error(await response.text());
         const data = (await response.json()) as { files: Array<{ path: string; name: string; size: number; content_type: string }> };
         const uploaded = data.files[0];
-        setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, status: "idle", config: { ...node.data.config, fileName: uploaded.name, filePath: uploaded.path, fileUrl: workspaceFileUrl(workspaceId, uploaded.path), size: String(uploaded.size), contentType: uploaded.content_type } } } : node));
+        setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, previewUrl: undefined, status: "idle", config: { ...node.data.config, fileName: uploaded.name, filePath: uploaded.path, fileUrl: workspaceFileUrl(workspaceId, uploaded.path), size: String(uploaded.size), contentType: uploaded.content_type } } } : node));
         setSaveState("dirty");
       } catch (reason) {
         setError(`上传素材失败：${String(reason).replace(/^Error:\s*/, "")}`);
@@ -603,6 +766,44 @@ function CanvasEditor({
       },
     ]);
     setSaveState("dirty");
+  };
+
+  frameImageRef.current = (sourceId, time) => {
+    const source = nodesRef.current.find((item) => item.id === sourceId);
+    if (!source?.data.config.fileUrl) return;
+    const createImageNode = async () => {
+      try {
+        const video = await loadFrameVideo(source.data.config.fileUrl);
+        const blob = await captureVideoFrame(video, time, 2048);
+        const sourceName = source.data.config.fileName.replace(/\.[^/.]+$/, "") || "video-frame";
+        const frameName = `${sourceName}-${Math.round(time * 1000)}ms.jpg`;
+        const previewUrl = URL.createObjectURL(blob);
+        const nextNode = makeNode("image-upload", { x: source.position.x + 380, y: source.position.y + 42 }, actions);
+        nextNode.data = {
+          ...nextNode.data,
+          previewUrl,
+          status: "running",
+          config: { ...nextNode.data.config, fileName: frameName, contentType: "image/jpeg" },
+        };
+        setNodes((current) => [...current, nextNode]);
+        setEdges((current) => [
+          ...current,
+          {
+            id: `edge-${sourceId}-${nextNode.id}`,
+            source: sourceId,
+            target: nextNode.id,
+            type: "default",
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed, color: "#c9a99d" },
+          },
+        ]);
+        setSaveState("dirty");
+        void actions.onUpload?.(nextNode.id, new File([blob], frameName, { type: "image/jpeg" }));
+      } catch (reason) {
+        setError(`创建图片节点失败：${String(reason).replace(/^Error:\s*/, "")}`);
+      }
+    };
+    void createImageNode();
   };
 
   const hydrate = useCallback((graph: CanvasGraph) => {

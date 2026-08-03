@@ -180,9 +180,54 @@ def _video_result_url(item: dict[str, Any]) -> str:
     return ""
 
 
+def _video_task_id(body: Any) -> str:
+    """Read task IDs from both generic and DashScope-style responses."""
+    if not isinstance(body, dict):
+        return ""
+    for key in ("id", "task_id", "job_id"):
+        value = body.get(key)
+        if isinstance(value, (str, int)) and str(value):
+            return str(value)
+    for key in ("output", "data", "result"):
+        value = body.get(key)
+        if isinstance(value, list):
+            for item in value:
+                task_id = _video_task_id(item)
+                if task_id:
+                    return task_id
+        else:
+            task_id = _video_task_id(value)
+            if task_id:
+                return task_id
+    return ""
+
+
+def _video_status(body: Any) -> str:
+    """Read task states such as DashScope's output.task_status."""
+    if not isinstance(body, dict):
+        return ""
+    for key in ("status", "state", "task_status"):
+        value = body.get(key)
+        if isinstance(value, str) and value:
+            return value.lower()
+    for key in ("output", "data", "result"):
+        value = body.get(key)
+        if isinstance(value, (dict, list)):
+            status = _video_status(value)
+            if status:
+                return status
+    return ""
+
+
 def _video_endpoint(value: Any, fallback: str, base_url: str) -> str:
     endpoint = str(value or fallback)
     return base_url.rstrip("/") + endpoint if endpoint.startswith("/") else endpoint
+
+
+def _video_task_url(endpoint: str, task_id: str) -> str:
+    """Support both names commonly used in saved model configurations."""
+    encoded_id = urllib.parse.quote(task_id, safe="")
+    return endpoint.replace("{task_id}", encoded_id).replace("{id}", encoded_id)
 
 
 def _download_video(url: str, headers: dict[str, str]) -> bytes:
@@ -201,11 +246,13 @@ def _request_video(
     resolution: str,
     audio: str,
 ) -> bytes:
-    """Call an OpenAI-compatible video endpoint and poll async jobs when needed.
+    """Call a configured video endpoint and poll async jobs when needed.
 
     Providers can override `video_endpoint`, `video_status_endpoint` and
-    `video_content_endpoint` in the model config JSON. The defaults follow the
-    common `/videos` create/status/content contract.
+    `video_content_endpoint` in the model config JSON. DashScope/百炼 uses its
+    nested `input`/`parameters` request and returns the final video URL from
+    the status response, while generic providers use the common `/videos`
+    create/status/content contract.
     """
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
     api_key_env = str(model.get("api_key_env") or "")
@@ -216,20 +263,48 @@ def _request_video(
         )
     config = model_config(model)
     base_url = str(model.get("base_url") or config.get("base_url") or "https://api.openai.com/v1")
-    endpoint = str(config.get("video_endpoint") or (base_url.rstrip("/") + "/videos"))
+    configured_endpoint = str(config.get("video_endpoint") or "")
+    is_dashscope = (
+        str(model.get("provider") or "").lower() in {"dashscope", "aliyun", "bailian"}
+        or "maas.aliyuncs.com" in base_url.lower()
+        or "dashscope.aliyuncs.com" in base_url.lower()
+        or "maas.aliyuncs.com" in configured_endpoint.lower()
+        or "dashscope.aliyuncs.com" in configured_endpoint.lower()
+    )
+    if is_dashscope and not configured_endpoint:
+        endpoint = base_url.rstrip("/") + "/api/v1/services/aigc/video-generation/video-synthesis"
+    else:
+        endpoint = configured_endpoint or (base_url.rstrip("/") + "/videos")
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if is_dashscope:
+        headers["X-DashScope-Async"] = "enable"
     try:
         seconds = max(1, int(str(duration or "5s").lower().replace("s", "")))
     except ValueError:
         seconds = 5
-    payload = {
-        "model": model.get("model"),
-        "prompt": prompt,
-        "seconds": seconds,
-        "duration": seconds,
-        "size": _video_size(ratio, resolution),
-        "audio": str(audio or "有声") == "有声",
-    }
+    has_audio = str(audio or "有声") == "有声"
+    if is_dashscope:
+        # 百炼可灵接口要求 prompt 放在 input，视频参数放在 parameters。
+        mode = "std" if str(resolution or "").lower() == "720p" else "pro"
+        payload = {
+            "model": model.get("model"),
+            "input": {"prompt": prompt},
+            "parameters": {
+                "mode": mode,
+                "aspect_ratio": ratio or "16:9",
+                "duration": seconds,
+                "audio": has_audio,
+            },
+        }
+    else:
+        payload = {
+            "model": model.get("model"),
+            "prompt": prompt,
+            "seconds": seconds,
+            "duration": seconds,
+            "size": _video_size(ratio, resolution),
+            "audio": has_audio,
+        }
     request = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -256,30 +331,53 @@ def _request_video(
     result_url = _video_result_url(item)
     if result_url:
         return _download_video(result_url, headers)
-    job_id = str(item.get("id") or item.get("task_id") or item.get("job_id") or "")
+    job_id = _video_task_id(body)
     if not job_id:
         raise CapabilityExecutionError("视频模型没有返回可保存的视频数据或任务 ID")
-    status_endpoint = _video_endpoint(config.get("video_status_endpoint"), endpoint.rstrip("/") + "/{id}", base_url)
-    content_endpoint = _video_endpoint(config.get("video_content_endpoint"), endpoint.rstrip("/") + "/{id}/content", base_url)
+    configured_status_endpoint = str(config.get("video_status_endpoint") or "")
+    status_fallback = (
+        base_url.rstrip("/") + "/api/v1/tasks/{id}"
+        if is_dashscope
+        else endpoint.rstrip("/") + "/{id}"
+    )
+    status_endpoint = _video_endpoint(configured_status_endpoint, status_fallback, base_url)
+    configured_content_endpoint = str(config.get("video_content_endpoint") or "")
+    content_endpoint = _video_endpoint(
+        configured_content_endpoint,
+        endpoint.rstrip("/") + "/{id}/content",
+        base_url,
+    )
     timeout_seconds = min(max(int(config.get("video_timeout_seconds") or 1800), 60), 3600)
     poll_seconds = min(max(float(config.get("video_poll_interval_seconds") or 3), 1), 15)
     deadline = time.monotonic() + timeout_seconds
+    poll_headers = {"Authorization": f"Bearer {api_key}"}
     while time.monotonic() < deadline:
-        poll_url = status_endpoint.format(id=urllib.parse.quote(job_id, safe=""))
+        poll_url = _video_task_url(status_endpoint, job_id)
         try:
-            with urllib.request.urlopen(urllib.request.Request(poll_url, headers=headers), timeout=60) as response:
+            with urllib.request.urlopen(urllib.request.Request(poll_url, headers=poll_headers), timeout=60) as response:
                 poll_body = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")[:600]
+            raise CapabilityExecutionError(
+                f"查询视频生成任务失败（HTTP {exc.code}）：{detail or exc.reason}（请求地址：{poll_url}）"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise CapabilityExecutionError(f"查询视频生成任务失败：{exc}") from exc
         poll_item = _video_item(poll_body)
-        status = str(poll_item.get("status") or poll_item.get("state") or "").lower()
+        status = _video_status(poll_body)
         if status in {"failed", "error", "cancelled", "canceled"}:
-            raise CapabilityExecutionError(str(poll_item.get("error") or "视频生成失败"))
+            error_message = poll_item.get("error") or poll_item.get("message")
+            output = poll_item.get("output")
+            if not error_message and isinstance(output, dict):
+                error_message = output.get("message") or output.get("error")
+            raise CapabilityExecutionError(str(error_message or "视频生成失败"))
         result_url = _video_result_url(poll_item)
         if result_url:
             return _download_video(result_url, headers)
         if status in {"completed", "complete", "succeeded", "success", "done"}:
-            return _download_video(content_endpoint.format(id=urllib.parse.quote(job_id, safe="")), headers)
+            if is_dashscope and not configured_content_endpoint:
+                raise CapabilityExecutionError("百炼任务已成功，但状态接口没有返回视频 URL")
+            return _download_video(_video_task_url(content_endpoint, job_id), poll_headers)
         time.sleep(poll_seconds)
     raise CapabilityExecutionError("视频生成超时，请检查模型服务状态")
 
