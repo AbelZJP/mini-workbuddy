@@ -120,6 +120,18 @@ def _project_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _new_project_row(payload: CreateCanvasProject) -> dict[str, Any]:
+    stamp = now()
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "workspace_id": payload.workspace_id,
+        "name": payload.name.strip() or "未命名项目",
+        "graph_json": json.dumps(payload.graph.model_dump(), ensure_ascii=False),
+        "created_at": stamp,
+        "updated_at": stamp,
+    }
+
+
 def _node_reference_content(node: dict[str, Any]) -> str:
     data = node.get("data") if isinstance(node.get("data"), dict) else {}
     config = data.get("config") if isinstance(data.get("config"), dict) else {}
@@ -163,11 +175,41 @@ def _resolve_node_context(graph: CanvasGraph, node_id: str) -> dict[str, Any]:
     return {"node_id": node_id, "references": references, "context": context}
 
 
+def _video_first_frame_path(graph: CanvasGraph, node_id: str) -> str:
+    nodes = {str(node.get("id")): node for node in graph.nodes}
+
+    def output_path(source_id: str) -> str:
+        source = nodes.get(source_id, {})
+        if str(source.get("type") or "") != "ai-image":
+            return ""
+        data = source.get("data") if isinstance(source.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        return str(config.get("outputPath") or "")
+
+    for edge in graph.edges:
+        if str(edge.get("target") or "") == node_id:
+            path = output_path(str(edge.get("source") or ""))
+            if path:
+                return path
+    for source_id, source in nodes.items():
+        data = source.get("data") if isinstance(source.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        if str(config.get("scope") or "direct") == "global":
+            path = output_path(source_id)
+            if path:
+                return path
+    return ""
+
+
 @router.get("/api/canvas/projects", response_model=list[CanvasProject])
-async def list_canvas_projects(workspace_id: str = Query(min_length=1)):
-    if not store.one("workspaces", "id=?", (workspace_id,)):
+async def list_canvas_projects(workspace_id: str | None = Query(default=None, min_length=1)):
+    if workspace_id and not store.one("workspaces", "id=?", (workspace_id,)):
         raise HTTPException(404, "工作空间不存在")
-    rows = store.all("canvas_projects", "workspace_id=? ORDER BY updated_at DESC", (workspace_id,))
+    rows = store.all(
+        "canvas_projects",
+        "workspace_id=? ORDER BY created_at DESC" if workspace_id else "1=1 ORDER BY created_at DESC",
+        (workspace_id,) if workspace_id else (),
+    )
     return [_project_row(row) for row in rows]
 
 
@@ -176,16 +218,31 @@ async def create_canvas_project(payload: CreateCanvasProject):
     if not store.one("workspaces", "id=?", (payload.workspace_id,)):
         raise HTTPException(404, "工作空间不存在")
     _validate_graph(payload.graph)
-    stamp = now()
-    row = {
-        "id": uuid.uuid4().hex[:12],
-        "workspace_id": payload.workspace_id,
-        "name": payload.name.strip() or "未命名项目",
-        "graph_json": json.dumps(payload.graph.model_dump(), ensure_ascii=False),
-        "created_at": stamp,
-        "updated_at": stamp,
-    }
+    row = _new_project_row(payload)
     store.insert("canvas_projects", row)
+    return _project_row(row)
+
+
+@router.post("/api/canvas/projects/initial", response_model=CanvasProject)
+async def ensure_initial_canvas_project(payload: CreateCanvasProject):
+    """Create the first project once, even when StrictMode mounts the canvas twice."""
+    _validate_graph(payload.graph)
+    with store.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        workspace = db.execute("SELECT id FROM workspaces WHERE id=?", (payload.workspace_id,)).fetchone()
+        if not workspace:
+            raise HTTPException(404, "工作空间不存在")
+        existing = db.execute(
+            "SELECT * FROM canvas_projects WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1",
+            (payload.workspace_id,),
+        ).fetchone()
+        if existing:
+            return _project_row(dict(existing))
+        row = _new_project_row(payload)
+        db.execute(
+            "INSERT INTO canvas_projects (id, workspace_id, name, graph_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (row["id"], row["workspace_id"], row["name"], row["graph_json"], row["created_at"], row["updated_at"]),
+        )
     return _project_row(row)
 
 
@@ -274,6 +331,7 @@ async def generate_canvas_node(
         )
         content_type = "image/png"
     else:
+        first_frame_path = _video_first_frame_path(graph, node_id)
         result = await generate_video(
             store,
             workspace["root_path"],
@@ -284,6 +342,7 @@ async def generate_canvas_node(
             audio=payload.audio,
             output_filename=output_filename + ".mp4",
             preferred_model_id=payload.model_id,
+            first_frame_path=first_frame_path,
         )
         content_type = "video/mp4"
     if not result.get("ok"):

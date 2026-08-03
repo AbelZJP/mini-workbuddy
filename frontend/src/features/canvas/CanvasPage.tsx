@@ -23,6 +23,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { json } from "../../app/api";
 import type {
   CanvasGraph,
@@ -525,8 +526,37 @@ function UploadNode(props: NodeProps<CanvasNode>) {
   );
 }
 
+function ImagePreviewDialog({ url, name, onClose }: { url: string; name: string; onClose: () => void }) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="canvas-image-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${name} 放大预览`}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="canvas-image-lightbox-content">
+        <img src={url} alt={name} />
+        <button type="button" aria-label="关闭预览" onClick={onClose}>×</button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function AiImageNode(props: NodeProps<CanvasNode>) {
   const { data, id } = props;
+  const [previewOpen, setPreviewOpen] = useState(false);
   const imageModels = data.models?.filter((model) => model.supports_image_generation);
   const modelOptions = imageModels?.length ? imageModels : data.models || [];
   return (
@@ -546,9 +576,13 @@ function AiImageNode(props: NodeProps<CanvasNode>) {
       </div>
       <button className="canvas-generate" type="button" disabled={data.status === "running"} onClick={() => data.onGenerate?.(id)}>{data.status === "running" ? "生成中…" : "生成图片"}</button>
       {data.config.outputUrl && <div className="canvas-generated-output">
-        <img src={data.config.outputUrl} alt={data.config.outputFileName || "生成图片"} />
+        <button className="canvas-generated-image" type="button" onPointerDown={(event) => event.stopPropagation()} onClick={() => setPreviewOpen(true)} title="点击放大查看">
+          <img src={data.config.outputUrl} alt={data.config.outputFileName || "生成图片"} />
+          <span>点击放大</span>
+        </button>
         <div className="canvas-generated-actions"><span>最新产出</span><a href={data.config.outputUrl} download={data.config.outputFileName || "generated-image.png"}>下载图片</a></div>
       </div>}
+      {previewOpen && data.config.outputUrl && <ImagePreviewDialog url={data.config.outputUrl} name={data.config.outputFileName || "生成图片"} onClose={() => setPreviewOpen(false)} />}
     </NodeShell>
   );
 }
@@ -631,6 +665,7 @@ function CanvasEditor({
   const savingRef = useRef(false);
   const nodesRef = useRef<CanvasNode[]>([]);
   const projectsRef = useRef<CanvasProject[]>([]);
+  const projectWorkspaceRef = useRef(workspaceId);
   const onProjectsChangeRef = useRef(onProjectsChange);
   const quickAddRef = useRef<(sourceId: string, kind: CanvasNodeKind) => void>(() => undefined);
   const frameImageRef = useRef<(sourceId: string, time: number) => void>(() => undefined);
@@ -663,16 +698,17 @@ function CanvasEditor({
       setSaveState("dirty");
     },
     onUpload: async (id: string, file: File) => {
-      if (!workspaceId) return;
+      const projectWorkspaceId = projectWorkspaceRef.current;
+      if (!projectWorkspaceId) return;
       setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, status: "running", config: { ...node.data.config, fileName: file.name, contentType: file.type } } } : node));
       const form = new FormData();
       form.append("files", file, file.name);
       try {
-        const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/files`, { method: "POST", body: form });
+        const response = await fetch(`/api/workspaces/${encodeURIComponent(projectWorkspaceId)}/files`, { method: "POST", body: form });
         if (!response.ok) throw new Error(await response.text());
         const data = (await response.json()) as { files: Array<{ path: string; name: string; size: number; content_type: string }> };
         const uploaded = data.files[0];
-        setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, previewUrl: undefined, status: "idle", config: { ...node.data.config, fileName: uploaded.name, filePath: uploaded.path, fileUrl: workspaceFileUrl(workspaceId, uploaded.path), size: String(uploaded.size), contentType: uploaded.content_type } } } : node));
+        setNodes((current) => current.map((node) => node.id === id ? { ...node, data: { ...node.data, previewUrl: undefined, status: "idle", config: { ...node.data.config, fileName: uploaded.name, filePath: uploaded.path, fileUrl: workspaceFileUrl(projectWorkspaceId, uploaded.path), size: String(uploaded.size), contentType: uploaded.content_type } } } : node));
         setSaveState("dirty");
       } catch (reason) {
         setError(`上传素材失败：${String(reason).replace(/^Error:\s*/, "")}`);
@@ -681,6 +717,7 @@ function CanvasEditor({
       }
     },
     onGenerate: async (id: string) => {
+      const projectWorkspaceId = projectWorkspaceRef.current;
       const node = nodesRef.current.find((item) => item.id === id);
       if (!node || !["ai-image", "ai-video"].includes(node.data.kind)) return;
       const prompt = node.data.config.prompt?.trim() || "";
@@ -705,7 +742,7 @@ function CanvasEditor({
         const nextConfig = {
           ...node.data.config,
           outputPath: result.artifact_path,
-          outputUrl: workspaceFileUrl(workspaceId, result.artifact_path),
+          outputUrl: workspaceFileUrl(projectWorkspaceId, result.artifact_path),
           outputFileName: result.artifact_path.split("/").pop() || "generated-media",
           outputContentType: result.content_type,
           model: result.model_id || node.data.config.model || "",
@@ -743,7 +780,7 @@ function CanvasEditor({
         setNodes((current) => current.map((item) => item.id === id ? { ...item, data: { ...item.data, status: "error" } } : item));
       }
     },
-  }), [models, projectId, setEdges, setNodes, workspaceId]);
+  }), [models, projectId, setEdges, setNodes]);
 
   quickAddRef.current = (sourceId, kind) => {
     const source = nodesRef.current.find((item) => item.id === sourceId);
@@ -806,7 +843,7 @@ function CanvasEditor({
     void createImageNode();
   };
 
-  const hydrate = useCallback((graph: CanvasGraph) => {
+  const hydrate = useCallback((graph: CanvasGraph, projectWorkspaceId: string) => {
     const hydrated = (graph.nodes || []).map((item) => {
       const config = {
         ...DEFAULT_CONFIG[item.type],
@@ -814,10 +851,10 @@ function CanvasEditor({
       };
       if (!config.scope) config.scope = "direct";
       if (config.filePath && !config.fileUrl) {
-        config.fileUrl = workspaceFileUrl(workspaceId, config.filePath);
+        config.fileUrl = workspaceFileUrl(projectWorkspaceId, config.filePath);
       }
       if (config.outputPath && !config.outputUrl) {
-        config.outputUrl = workspaceFileUrl(workspaceId, config.outputPath);
+        config.outputUrl = workspaceFileUrl(projectWorkspaceId, config.outputPath);
       }
       return {
         ...item,
@@ -841,26 +878,27 @@ function CanvasEditor({
       })) as CanvasEdge[],
     );
     setViewport(graph.viewport || EMPTY_GRAPH.viewport);
-  }, [actions, setEdges, setNodes, workspaceId]);
+  }, [actions, setEdges, setNodes]);
 
   const loadProjects = useCallback(async () => {
     if (!workspaceId) return;
     loadedRef.current = false;
     try {
-      const list = await json<CanvasProject[]>(`/api/canvas/projects?workspace_id=${encodeURIComponent(workspaceId)}`);
+      const list = await json<CanvasProject[]>("/api/canvas/projects");
       let available = list;
       if (!available.length) {
-        const created = await json<CanvasProject>("/api/canvas/projects", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: "未命名项目", graph: EMPTY_GRAPH }) });
+        const created = await json<CanvasProject>("/api/canvas/projects/initial", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: "未命名项目", graph: EMPTY_GRAPH }) });
         available = [created];
       }
       setProjects(available);
       projectsRef.current = available;
       onProjectsChange?.(available);
       const current = available.find((item) => item.id === requestedProjectId) || available[0];
+      projectWorkspaceRef.current = current.workspace_id;
       setProjectId(current.id);
       onProjectSelected?.(current.id);
       setProjectName(current.name);
-      hydrate(current.graph);
+      hydrate(current.graph, current.workspace_id);
       setSaveState("saved");
       loadedRef.current = true;
     } catch (reason) {
@@ -923,18 +961,21 @@ function CanvasEditor({
   const selectProject = (id: string) => {
     const next = projects.find((item) => item.id === id);
     if (!next) return;
-    setProjectId(next.id); onProjectSelected?.(next.id); setProjectName(next.name); hydrate(next.graph); setSaveState("saved");
+    projectWorkspaceRef.current = next.workspace_id;
+    setProjectId(next.id); onProjectSelected?.(next.id); setProjectName(next.name); hydrate(next.graph, next.workspace_id); setSaveState("saved");
   };
   const createProject = async () => {
     try {
-      const created = await json<CanvasProject>("/api/canvas/projects", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: "未命名项目", graph: EMPTY_GRAPH }) });
+      const endpoint = projects.length ? "/api/canvas/projects" : "/api/canvas/projects/initial";
+      const created = await json<CanvasProject>(endpoint, { method: "POST", body: JSON.stringify({ workspace_id: workspaceId, name: "未命名项目", graph: EMPTY_GRAPH }) });
       const nextProjects = [created, ...projects];
       setProjects(nextProjects);
       onProjectsChange?.(nextProjects);
       onProjectSelected?.(created.id);
       setProjectId(created.id);
       setProjectName(created.name);
-      hydrate(created.graph);
+      projectWorkspaceRef.current = created.workspace_id;
+      hydrate(created.graph, created.workspace_id);
       setSaveState("saved");
     } catch (reason) { setError(`新建画布失败：${String(reason).replace(/^Error:\s*/, "")}`); }
   };

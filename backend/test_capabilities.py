@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .capability_executor import _request_video, generate_image, generate_video
+from .capability_executor import _request_video, _request_wanxiang_i2v, _wanxiang_first_frame_data_url, generate_image, generate_video
 from .capability_registry import capability_rows
 from .model_router import route_model, set_capability_model
 
@@ -74,6 +74,65 @@ def video_model(model_id: str = "video") -> dict:
 
 
 class CapabilityTests(unittest.TestCase):
+    def test_wanxiang_i2v_uses_first_frame_media_protocol(self):
+        class FakeResponse:
+            def __init__(self, body: bytes, content_type: str = "application/json"):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        model = {
+            "id": "wanxiang",
+            "name": "万相 2.7 图生视频",
+            "model": "wan2.7-i2v-2026-04-25",
+            "provider": "dashscope",
+            "base_url": "https://workspace.cn-beijing.maas.aliyuncs.com",
+            "api_key_env": "TEST_VIDEO_KEY",
+            "config": json.dumps({"video_poll_interval_seconds": 1}),
+        }
+        responses = [
+            FakeResponse(json.dumps({"output": {"task_id": "task-123", "task_status": "PENDING"}}).encode()),
+            FakeResponse(json.dumps({"output": {"task_id": "task-123", "task_status": "SUCCEEDED", "video_url": "https://result.example/video.mp4"}}).encode()),
+            FakeResponse(b"mp4", "video/mp4"),
+        ]
+        with patch.dict("os.environ", {"TEST_VIDEO_KEY": "sk-test"}, clear=False):
+            with patch("backend.capability_executor.urllib.request.urlopen", side_effect=responses) as urlopen:
+                result = _request_wanxiang_i2v(
+                    model,
+                    "让角色缓慢转头",
+                    "5s",
+                    "1080p",
+                    "data:image/png;base64,aGVsbG8=",
+                )
+
+        self.assertEqual(result, b"mp4")
+        create_request = urlopen.call_args_list[0].args[0]
+        payload = json.loads(create_request.data.decode())
+        self.assertEqual(create_request.get_header("X-dashscope-async"), "enable")
+        self.assertEqual(payload["input"]["media"], [{"type": "first_frame", "url": "data:image/png;base64,aGVsbG8="}])
+        self.assertEqual(payload["parameters"]["resolution"], "1080P")
+        self.assertEqual(payload["parameters"]["duration"], 5)
+        self.assertEqual(urlopen.call_args_list[1].args[0].full_url, "https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/tasks/task-123")
+        result_request = urlopen.call_args_list[2].args[0]
+        self.assertEqual(result_request.full_url, "https://result.example/video.mp4")
+        self.assertIsNone(result_request.get_header("Authorization"))
+
+    def test_wanxiang_first_frame_is_encoded_as_data_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "outputs" / "frame.png"
+            image.parent.mkdir()
+            image.write_bytes(b"frame")
+            data_url = _wanxiang_first_frame_data_url(directory, "outputs/frame.png")
+        self.assertEqual(data_url, "data:image/png;base64,ZnJhbWU=")
+
     def test_dashscope_video_uses_async_contract_and_nested_result(self):
         class FakeResponse:
             def __init__(self, body: bytes, content_type: str = "application/json"):

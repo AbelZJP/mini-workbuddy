@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from fastapi import HTTPException
 
+from .api.routers import canvas
 from .api.routers.canvas import (
     _image_size,
     _project_row,
     _resolve_node_context,
     _validate_graph,
+    _video_first_frame_path,
 )
-from .schemas import CanvasGraph
+from .schemas import CanvasGraph, CreateCanvasProject
 from .storage import Store
 
 
@@ -38,6 +42,48 @@ class CanvasPersistenceTests(unittest.TestCase):
                 columns,
                 {"id", "workspace_id", "name", "graph_json", "created_at", "updated_at"},
             )
+
+    def test_initial_canvas_project_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Store(Path(temp_dir) / "canvas.sqlite3")
+            store.insert("workspaces", {
+                "id": "workspace",
+                "name": "测试空间",
+                "root_path": temp_dir,
+                "description": "",
+                "created_at": "2026-08-03",
+                "updated_at": "2026-08-03",
+            })
+            payload = CreateCanvasProject(workspace_id="workspace")
+            with patch.object(canvas, "store", store):
+                first = asyncio.run(canvas.ensure_initial_canvas_project(payload))
+                second = asyncio.run(canvas.ensure_initial_canvas_project(payload))
+            self.assertEqual(first["id"], second["id"])
+            self.assertEqual(len(store.all("canvas_projects", "workspace_id=?", ("workspace",))), 1)
+
+    def test_canvas_project_list_can_include_all_workspaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Store(Path(temp_dir) / "canvas.sqlite3")
+            for workspace_id in ("first", "second"):
+                store.insert("workspaces", {
+                    "id": workspace_id,
+                    "name": workspace_id,
+                    "root_path": temp_dir,
+                    "description": "",
+                    "created_at": "2026-08-03",
+                    "updated_at": "2026-08-03",
+                })
+                store.insert("canvas_projects", {
+                    "id": f"project-{workspace_id}",
+                    "workspace_id": workspace_id,
+                    "name": workspace_id,
+                    "graph_json": "{}",
+                    "created_at": f"2026-08-03T00:00:0{1 if workspace_id == 'first' else 2}",
+                    "updated_at": "2026-08-03",
+                })
+            with patch.object(canvas, "store", store):
+                projects = asyncio.run(canvas.list_canvas_projects(workspace_id=None))
+            self.assertEqual([project["workspace_id"] for project in projects], ["second", "first"])
 
     def test_graph_is_returned_as_json_safe_project_data(self) -> None:
         graph = CanvasGraph(
@@ -115,6 +161,26 @@ class CanvasPersistenceTests(unittest.TestCase):
             {item["source_node_id"] for item in other_context["references"]},
             {"global"},
         )
+
+    def test_video_uses_direct_ai_image_output_as_first_frame(self) -> None:
+        graph = CanvasGraph(
+            nodes=[
+                {
+                    "id": "image",
+                    "type": "ai-image",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"config": {"outputPath": "outputs/first-frame.png"}},
+                },
+                {
+                    "id": "video",
+                    "type": "ai-video",
+                    "position": {"x": 1, "y": 1},
+                    "data": {"config": {}},
+                },
+            ],
+            edges=[{"source": "image", "target": "video"}],
+        )
+        self.assertEqual(_video_first_frame_path(graph, "video"), "outputs/first-frame.png")
 
 
 if __name__ == "__main__":

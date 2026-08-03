@@ -64,33 +64,30 @@ export function App() {
     () => tasks.find((item) => item.id === taskId),
     [tasks, taskId],
   );
-  const canvasProjects = canvasProjectsByWorkspace[workspaceId] || [];
+  const canvasProjects = canvasProjectsByWorkspace.all || [];
   const handleCanvasProjectsChange = useCallback(
     (items: CanvasProject[]) => {
       setCanvasProjectsByWorkspace((current) => ({
         ...current,
-        [workspaceId]: items,
+        all: items,
       }));
     },
-    [workspaceId],
+    [],
   );
 
   useEffect(() => {
-    if (!workspaceId) return;
-    json<CanvasProject[]>(
-      `/api/canvas/projects?workspace_id=${encodeURIComponent(workspaceId)}`,
-    )
+    json<CanvasProject[]>("/api/canvas/projects")
       .then((items) => {
         setCanvasProjectsByWorkspace((current) => ({
           ...current,
-          [workspaceId]: items,
+          all: items,
         }));
         setCanvasProjectId((current) =>
           items.some((item) => item.id === current) ? current : items[0]?.id || "",
         );
       })
       .catch((reason) => setError(`读取画布项目失败：${String(reason)}`));
-  }, [workspaceId]);
+  }, []);
 
   const { refresh } = useAppBootstrap({
     workspaceId,
@@ -163,7 +160,8 @@ export function App() {
   const createCanvasProject = async (targetWorkspaceId = workspaceId) => {
     if (!targetWorkspaceId) return;
     try {
-      const created = await json<CanvasProject>("/api/canvas/projects", {
+      const hasProjects = canvasProjects.some((project) => project.workspace_id === targetWorkspaceId);
+      const created = await json<CanvasProject>(hasProjects ? "/api/canvas/projects" : "/api/canvas/projects/initial", {
         method: "POST",
         body: JSON.stringify({
           workspace_id: targetWorkspaceId,
@@ -173,9 +171,9 @@ export function App() {
       });
       setCanvasProjectsByWorkspace((current) => ({
         ...current,
-        [targetWorkspaceId]: [
+        all: [
           created,
-          ...(current[targetWorkspaceId] || []).filter(
+          ...(current.all || []).filter(
             (item) => item.id !== created.id,
           ),
         ],

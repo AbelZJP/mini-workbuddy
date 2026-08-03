@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import mimetypes
 import os
 import time
 import urllib.parse
@@ -238,6 +239,125 @@ def _download_video(url: str, headers: dict[str, str]) -> bytes:
         raise CapabilityExecutionError(f"下载视频模型结果失败：{exc}") from exc
 
 
+def _is_wanxiang_i2v(model: dict[str, Any]) -> bool:
+    config = model_config(model)
+    adapter = str(config.get("video_adapter") or "").lower()
+    identity = " ".join(str(model.get(key) or "") for key in ("model", "name", "provider")).lower()
+    return adapter == "wanxiang_i2v" or "wan2.7-i2v" in identity
+
+
+def _wanxiang_first_frame_data_url(workspace_root: str, relative_path: str) -> str:
+    root = Path(workspace_root).expanduser().resolve()
+    source = Path(relative_path or "")
+    if source.is_absolute():
+        raise CapabilityExecutionError("万相首帧必须来自当前工作空间内的图片产物")
+    target = (root / source).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise CapabilityExecutionError("未找到可作为万相首帧的 AI 图片产物")
+    media_type = mimetypes.guess_type(target.name)[0] or ""
+    if media_type not in {"image/jpeg", "image/png", "image/bmp", "image/webp"}:
+        raise CapabilityExecutionError("万相首帧仅支持 JPEG、PNG、BMP 或 WebP 图片")
+    if target.stat().st_size > 20 * 1024 * 1024:
+        raise CapabilityExecutionError("万相首帧图片不能超过 20MB")
+    encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
+
+
+def _request_wanxiang_i2v(
+    model: dict[str, Any],
+    prompt: str,
+    duration: str,
+    resolution: str,
+    first_frame_data_url: str,
+) -> bytes:
+    """Run Wan 2.7 image-to-video through its dedicated media-array protocol."""
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+    api_key_env = str(model.get("api_key_env") or "")
+    api_key = os.getenv(api_key_env, "") if api_key_env else ""
+    if not api_key:
+        raise CapabilityExecutionError(
+            f"万相模型“{model.get('name', model.get('model', '当前模型'))}”未读取到 API Key。"
+        )
+    config = model_config(model)
+    base_url = str(model.get("base_url") or config.get("base_url") or "https://dashscope.aliyuncs.com").rstrip("/")
+    api_base = base_url if base_url.endswith("/api/v1") else base_url + "/api/v1"
+    endpoint = str(config.get("video_endpoint") or "") or api_base + "/services/aigc/video-generation/video-synthesis"
+    try:
+        seconds = min(15, max(2, int(str(duration or "5s").lower().replace("s", ""))))
+    except ValueError:
+        seconds = 5
+    payload = {
+        "model": model.get("model"),
+        "input": {
+            "prompt": prompt,
+            "media": [{"type": "first_frame", "url": first_frame_data_url}],
+        },
+        "parameters": {
+            "resolution": "720P" if str(resolution or "").lower() == "720p" else "1080P",
+            "duration": seconds,
+            "prompt_extend": bool(config.get("wanxiang_prompt_extend", True)),
+            "watermark": bool(config.get("wanxiang_watermark", False)),
+        },
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+    }
+    request = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:600]
+        raise CapabilityExecutionError(f"万相视频请求失败（HTTP {exc.code}）：{detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise CapabilityExecutionError(f"万相视频请求失败：{exc}") from exc
+    job_id = _video_task_id(body)
+    if not job_id:
+        raise CapabilityExecutionError("万相没有返回视频任务 ID")
+    status_endpoint = _video_endpoint(
+        config.get("video_status_endpoint"),
+        api_base + "/tasks/{id}",
+        base_url,
+    )
+    content_endpoint = _video_endpoint(
+        config.get("video_content_endpoint"),
+        endpoint.rstrip("/") + "/{id}/content",
+        base_url,
+    )
+    timeout_seconds = min(max(int(config.get("video_timeout_seconds") or 1800), 60), 3600)
+    poll_seconds = min(max(float(config.get("video_poll_interval_seconds") or 3), 1), 15)
+    deadline = time.monotonic() + timeout_seconds
+    poll_headers = {"Authorization": f"Bearer {api_key}"}
+    while time.monotonic() < deadline:
+        poll_url = _video_task_url(status_endpoint, job_id)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(poll_url, headers=poll_headers), timeout=60) as response:
+                poll_body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")[:600]
+            raise CapabilityExecutionError(f"查询万相视频任务失败（HTTP {exc.code}）：{detail or exc.reason}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise CapabilityExecutionError(f"查询万相视频任务失败：{exc}") from exc
+        item = _video_item(poll_body)
+        status = _video_status(poll_body)
+        if status in {"failed", "error", "cancelled", "canceled"}:
+            output = item.get("output") if isinstance(item.get("output"), dict) else {}
+            raise CapabilityExecutionError(str(item.get("message") or item.get("error") or output.get("message") or "万相视频生成失败"))
+        result_url = _video_result_url(item)
+        if result_url:
+            # 万相返回的是临时授权的产物 URL，应直接访问；携带模型 API 的
+            # Bearer 令牌可能会被 OSS/CDN 拒绝为 403。
+            return _download_video(result_url, {})
+        if status in {"completed", "complete", "succeeded", "success", "done"}:
+            if config.get("video_content_endpoint"):
+                return _download_video(_video_task_url(content_endpoint, job_id), poll_headers)
+            raise CapabilityExecutionError("万相任务已成功，但状态接口没有返回视频 URL")
+        time.sleep(poll_seconds)
+    raise CapabilityExecutionError("万相视频生成超时，请检查模型服务状态")
+
+
 def _request_video(
     model: dict[str, Any],
     prompt: str,
@@ -392,6 +512,7 @@ async def generate_video(
     audio: str = "有声",
     output_filename: str = "",
     preferred_model_id: str = "",
+    first_frame_path: str = "",
 ) -> dict[str, Any]:
     prompt = str(prompt or "").strip()
     if not prompt:
@@ -405,7 +526,20 @@ async def generate_video(
         }
     target, relative_path = _safe_video_output_path(workspace_root, output_filename)
     try:
-        video_bytes = await asyncio.to_thread(_request_video, model, prompt, ratio, duration, resolution, audio)
+        if _is_wanxiang_i2v(model):
+            if not first_frame_path:
+                raise CapabilityExecutionError("万相图生视频需要直接连接一个已生成图片的 AI 图片节点作为首帧")
+            first_frame_data_url = _wanxiang_first_frame_data_url(workspace_root, first_frame_path)
+            video_bytes = await asyncio.to_thread(
+                _request_wanxiang_i2v,
+                model,
+                prompt,
+                duration,
+                resolution,
+                first_frame_data_url,
+            )
+        else:
+            video_bytes = await asyncio.to_thread(_request_video, model, prompt, ratio, duration, resolution, audio)
         target.write_bytes(video_bytes)
     except (OSError, CapabilityExecutionError) as exc:
         return {"ok": False, "retryable": False, "message": str(exc)}
