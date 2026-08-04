@@ -1,0 +1,257 @@
+.capability-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.capability-picker .round-tool.active {
+  background: #efe1da;
+  color: #aa5342;
+}
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 118px;
+  height: 25px;
+  padding: 0 5px 0 7px;
+  border: 1px solid #eadbd3;
+  border-radius: 7px;
+  background: #fff8f5;
+  color: #80584e;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.capability-chip.skill {
+  border-color: #e6dfc5;
+  background: #fffdf4;
+  color: #8a7537;
+}
+.capability-chip i {
+  font-style: normal;
+  font-size: 8px;
+}
+.capability-chip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.capability-chip button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 5px;
+  background: transparent;
+  color: #a68c81;
+  font-size: 13px;
+  line-height: 1;
+}
+.capability-chip button:hover {
+  background: #f0ddd5;
+  color: #b7503e;
+}
+.capability-menu {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 9px);
+  left: 0;
+  width: 330px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #e4d8d0;
+  border-radius: 12px;
+  background: #fffefa;
+  box-shadow: 0 16px 42px rgba(58, 41, 30, 0.16);
+  animation: capability-pop 0.15s ease-out;
+}
+.capability-menu-item,
+.capability-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+.capability-menu-item:hover,
+.capability-choice:hover {
+  background: #faf1ed;
+}
+.capability-menu-item > span:nth-child(2),
+.capability-choice > span {
+  min-width: 0;
+  flex: 1;
+}
+.capability-menu-item b,
+.capability-choice b {
+  display: block;
+  overflow: hidden;
+  color: #37342f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capability-menu-item small,
+.capability-choice small,
+.capability-mcp small {
+  display: block;
+  overflow: hidden;
+  margin-top: 3px;
+  color: #9a938a;
+  font: 8px "DM Mono";
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capability-menu-item > i {
+  margin-left: auto;
+  color: #aaa095;
+  font-style: normal;
+  font-size: 18px;
+}
+.capability-menu-icon {
+  width: 25px;
+  height: 25px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #f2eee8;
+  color: #a26050;
+  font-size: 13px;
+}
+.capability-menu-item:nth-child(2) .capability-menu-icon {
+  background: #f5f0d9;
+  color: #94803c;
+}
+.capability-menu-item:nth-child(3) .capability-menu-icon {
+  background: #f4e5df;
+  color: #a85c49;
+}
+.capability-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 1px 2px 5px;
+  padding: 4px 4px 9px;
+  border-bottom: 1px solid #eee9e2;
+}
+.capability-menu-head button {
+  padding: 4px 2px;
+  background: transparent;
+  color: #a05949;
+  font-size: 9px;
+}
+.capability-menu-head strong {
+  color: #4e4942;
+  font-size: 10px;
+}
+.capability-choice {
+  min-height: 46px;
+}
+.capability-choice.selected {
+  background: #f8eae4;
+}
+.capability-choice.selected b {
+  color: #a34d3d;
+}
+.capability-choice > i {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 6px;
+  background: #f1efea;
+  color: #7f776e;
+  font-style: normal;
+  font-size: 14px;
+}
+.capability-choice.selected > i {
+  background: #dfc1b6;
+  color: #fff;
+}
+.capability-choice:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.capability-mcp {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+.capability-mcp > span {
+  min-width: 0;
+  flex: 1;
+}
+.capability-mcp b {
+  display: block;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.capability-mcp .toggle {
+  margin-left: 0;
+  flex: none;
+}
+.capability-empty,
+.capability-error {
+  margin: 8px 5px;
+  padding: 11px;
+  border-radius: 7px;
+  background: #f6f4ef;
+  color: #969087;
+  font-size: 9px;
+  line-height: 1.55;
+}
+.capability-error {
+  background: #fff1ed;
+  color: #b55441;
+}
+@keyframes capability-pop {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* Keep task capabilities inside the composer and reserve space for removal controls. */
+.composer-toolbar {
+  align-items: flex-start;
+  gap: 7px;
+}
+.toolbar-left,
+.toolbar-right {
+  min-width: 0;
+}
+.toolbar-left {
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+.toolbar-right {
+  flex: none;
+  align-self: flex-end;
+}
+.capability-picker {
+  min-width: 25px;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+.capability-chip {
+  min-width: 0;
+}
+.capability-chip {
+  flex-shrink: 0;
+}
+.capability-chip i {
+  flex: none;
+}

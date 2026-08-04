@@ -1,0 +1,254 @@
+.sidebar {
+  width: 244px;
+  flex: none;
+  background: var(--sidebar);
+  border-right: 1px solid #e2e1da;
+  padding: 18px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+.brand {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 2px 9px 24px;
+}
+.brand-mark {
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+}
+.brand strong {
+  display: block;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+}
+.brand span {
+  display: block;
+  color: var(--muted);
+  font-family: "DM Mono";
+  font-size: 8px;
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.new-task {
+  background: var(--ink);
+  color: #fff;
+  width: 100%;
+  border-radius: 8px;
+  text-align: left;
+  padding: 10px 11px;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.1);
+}
+.new-task span {
+  font-size: 17px;
+  font-weight: 400;
+}
+.new-task kbd {
+  margin-left: auto;
+  color: #aaa;
+  font: 9px "DM Mono";
+}
+.primary-nav {
+  padding: 16px 0 14px;
+  border-bottom: 1px solid #dddcd5;
+}
+.primary-nav button,
+.sidebar-footer > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  width: 100%;
+  padding: 10px 11px;
+  text-align: left;
+  font-size: 12px;
+  color: #5f5d57;
+  border-radius: 7px;
+}
+.primary-nav button:hover,
+.primary-nav button.active,
+.sidebar-footer > button:hover,
+.sidebar-footer > button.active {
+  background: #e5e4de;
+  color: var(--ink);
+  font-weight: 700;
+}
+.nav-icon {
+  font-size: 16px;
+  color: #77746b;
+  width: 15px;
+  text-align: center;
+}
+.workspace-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 10px 8px;
+  color: #77746b;
+  font: 10px "DM Mono";
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.workspace-label button {
+  font-size: 16px;
+  background: transparent;
+  color: #85827a;
+}
+.workspace-list {
+  overflow: auto;
+}
+.workspace-group {
+  margin-bottom: 6px;
+}
+.workspace-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  background: transparent;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+}
+.workspace-name .folder {
+  font-size: 12px;
+  color: #ba8a42;
+}
+.task-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px 8px 28px;
+  border-radius: 6px;
+  background: transparent;
+  color: #6f6d66;
+  font-size: 11px;
+  text-align: left;
+}
+.task-item:hover,
+.task-item.selected {
+  background: #fffefa;
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+.task-item small {
+  font: 8px "DM Mono";
+  color: #aaa;
+  margin-left: auto;
+}
+.task-dot {
+  font-size: 16px;
+  color: #aaa;
+}
+.sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid #dddcd5;
+  padding-top: 10px;
+}
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 9px 2px;
+}
+.avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #d6b995;
+  color: #6c4a29;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 11px;
+}
+.profile b {
+  display: block;
+  font-size: 10px;
+}
+.profile span {
+  display: block;
+  color: #999;
+  font: 8px "DM Mono";
+  margin-top: 2px;
+}
+.profile .more {
+  margin-left: auto;
+  font-size: 12px;
+  color: #aaa;
+}
+.main-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fffefa;
+}
+.topbar {
+  height: 83px;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 38px;
+}
+.eyebrow {
+  font: 9px "DM Mono";
+  color: #aaa59a;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.topbar h1 {
+  font-size: 18px;
+  line-height: 1;
+  margin: 7px 0 0;
+  letter-spacing: -0.04em;
+}
+.topbar p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.status-pill {
+  font: 9px "DM Mono";
+  color: #77746b;
+  background: #f4f3ee;
+  border-radius: 999px;
+  padding: 7px 10px;
+}
+.status-pill i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #69a36c;
+  margin-right: 6px;
+}
+.icon-button {
+  width: 29px;
+  height: 29px;
+  border-radius: 7px;
+  background: #f3f2ed;
+  color: #888;
+}

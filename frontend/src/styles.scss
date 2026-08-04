@@ -1,0 +1,14 @@
+// Keep imports in source order so existing CSS cascade remains unchanged.
+@use "styles/base";
+@use "styles/shell";
+@use "styles/features/chat/core";
+@use "styles/features/settings";
+@use "styles/features/chat/overrides";
+@use "styles/features/skills";
+@use "styles/features/mcp";
+@use "styles/features/chat/content";
+@use "styles/features/experts";
+@use "styles/features/chat/capabilities";
+@use "styles/features/settings/workspace";
+@use "styles/features/canvas";
+@use "styles/features/markdown";

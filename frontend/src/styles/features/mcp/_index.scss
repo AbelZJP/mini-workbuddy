@@ -1,0 +1,40 @@
+.mcp-headers-textarea {
+  display: block;
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fffefa;
+  outline: 0;
+  font: 10px/1.55 "DM Mono";
+  color: var(--ink);
+}
+.mcp-headers-textarea:focus {
+  border-color: #d9b7ad;
+  box-shadow: 0 0 0 3px rgba(232, 93, 69, 0.08);
+}
+.compact-note {
+  margin: -7px 0 14px;
+  font-size: 9px;
+  line-height: 1.6;
+}
+.mcp-test-result {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font: 10px/1.6 "DM Mono";
+  white-space: pre-wrap;
+}
+.mcp-test-result.success {
+  border: 1px solid #c6dfc6;
+  background: #eef8ee;
+  color: #4d8a53;
+}
+.mcp-test-result.failure {
+  border: 1px solid #efc0b4;
+  background: #fff3ef;
+  color: #b45040;
+}

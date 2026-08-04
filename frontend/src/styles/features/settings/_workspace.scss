@@ -1,0 +1,59 @@
+.capability-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-path-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+}
+.workspace-path-row input {
+  min-width: 0;
+  flex: 1;
+  margin-top: 0;
+}
+.workspace-path-button {
+  flex: none;
+  padding: 10px 11px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.task-item {
+  min-width: 0;
+}
+.task-item > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-item small {
+  flex: none;
+}
+.modal .model-capability-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.modal .model-capability-checkbox {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--coral);
+}
+.modal .model-capability-option span {
+  display: block;
+}
+.model-add-button {
+  margin-top: 0;
+  margin-bottom: 18px;
+}
