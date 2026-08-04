@@ -38,7 +38,36 @@ def _safe_output_path(workspace_root: str, output_filename: str) -> tuple[Path, 
     return target, target.relative_to(root).as_posix()
 
 
-def _request_image(model: dict[str, Any], prompt: str, size: str) -> bytes:
+def _is_ark_seedream_i2i(model: dict[str, Any]) -> bool:
+    config = model_config(model)
+    adapter = str(config.get("image_adapter") or "").lower()
+    identity = " ".join(str(model.get(key) or "") for key in ("model", "name", "provider")).lower()
+    return adapter == "ark_seedream_i2i" or "seedream" in identity
+
+
+def _seedream_reference_data_url(workspace_root: str, relative_path: str) -> str:
+    root = Path(workspace_root).expanduser().resolve()
+    source = Path(relative_path or "")
+    if source.is_absolute():
+        raise CapabilityExecutionError("Seedream 参考图必须来自当前工作空间内的图片节点")
+    target = (root / source).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise CapabilityExecutionError("未找到可作为 Seedream 参考图的图片文件")
+    media_type = mimetypes.guess_type(target.name)[0] or ""
+    if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise CapabilityExecutionError("Seedream 参考图仅支持 JPEG、PNG 或 WebP 图片")
+    if target.stat().st_size > 20 * 1024 * 1024:
+        raise CapabilityExecutionError("Seedream 参考图不能超过 20MB")
+    encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
+
+
+def _request_image(
+    model: dict[str, Any],
+    prompt: str,
+    size: str,
+    reference_images: list[str] | None = None,
+) -> bytes:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
     api_key_env = str(model.get("api_key_env") or "")
     api_key = os.getenv(api_key_env, "") if api_key_env else ""
@@ -56,6 +85,12 @@ def _request_image(model: dict[str, Any], prompt: str, size: str) -> bytes:
         "prompt": prompt,
         "size": size or str(config.get("image_size") or "1024x1024"),
     }
+    if reference_images:
+        if not _is_ark_seedream_i2i(model):
+            raise CapabilityExecutionError(
+                f"图片模型“{model.get('name', model.get('model', '当前模型'))}”未配置参考图生图能力。"
+            )
+        payload["image"] = reference_images
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
@@ -100,6 +135,7 @@ async def generate_image(
     size: str = "1024x1024",
     output_filename: str = "",
     preferred_model_id: str = "",
+    reference_image_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Execute the stable image.generate capability through the routed model."""
     prompt = str(prompt or "").strip()
@@ -114,7 +150,12 @@ async def generate_image(
         }
     target, relative_path = _safe_output_path(workspace_root, output_filename)
     try:
-        image_bytes = await asyncio.to_thread(_request_image, model, prompt, size)
+        references = [
+            _seedream_reference_data_url(workspace_root, path)
+            for path in (reference_image_paths or [])
+            if path
+        ]
+        image_bytes = await asyncio.to_thread(_request_image, model, prompt, size, references)
         target.write_bytes(image_bytes)
     except (OSError, CapabilityExecutionError) as exc:
         return {"ok": False, "retryable": False, "message": str(exc)}

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from .capability_executor import _request_video, _request_wanxiang_i2v, _wanxiang_first_frame_data_url, generate_image, generate_video
+from .capability_executor import _request_image, _request_video, _request_wanxiang_i2v, _seedream_reference_data_url, _wanxiang_first_frame_data_url, generate_image, generate_video
 from .capability_registry import capability_rows
 from .model_router import route_model, set_capability_model
 
@@ -74,6 +74,60 @@ def video_model(model_id: str = "video") -> dict:
 
 
 class CapabilityTests(unittest.TestCase):
+    def test_seedream_reference_images_use_ark_image_field(self):
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        model = {
+            "id": "seedream",
+            "name": "豆包 Seedream 5.0",
+            "model": "doubao-seedream-5-0-260128",
+            "provider": "openai_compatible",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "api_key_env": "TEST_IMAGE_KEY",
+            "config": "{}",
+        }
+        with patch.dict("os.environ", {"TEST_IMAGE_KEY": "sk-test"}, clear=False):
+            with patch(
+                "backend.capability_executor.urllib.request.urlopen",
+                return_value=FakeResponse(json.dumps({"data": [{"b64_json": "cG5n"}]}).encode()),
+            ) as urlopen:
+                result = _request_image(
+                    model,
+                    "参考图中的人物形象生成海报",
+                    "2048x2048",
+                    ["data:image/png;base64,cmVmZXJlbmNl"],
+                )
+        self.assertEqual(result, b"png")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://ark.cn-beijing.volces.com/api/v3/images/generations")
+        self.assertEqual(
+            json.loads(request.data.decode())["image"],
+            ["data:image/png;base64,cmVmZXJlbmNl"],
+        )
+
+    def test_seedream_reference_image_requires_workspace_relative_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "uploads" / "reference.png"
+            image.parent.mkdir()
+            image.write_bytes(b"reference")
+            self.assertEqual(
+                _seedream_reference_data_url(directory, "uploads/reference.png"),
+                "data:image/png;base64,cmVmZXJlbmNl",
+            )
+            with self.assertRaisesRegex(Exception, "当前工作空间"):
+                _seedream_reference_data_url(directory, "/tmp/reference.png")
+
     def test_wanxiang_i2v_uses_first_frame_media_protocol(self):
         class FakeResponse:
             def __init__(self, body: bytes, content_type: str = "application/json"):

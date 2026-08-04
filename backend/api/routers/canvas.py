@@ -201,6 +201,34 @@ def _video_first_frame_path(graph: CanvasGraph, node_id: str) -> str:
     return ""
 
 
+def _image_reference_paths(graph: CanvasGraph, node_id: str) -> list[str]:
+    """Resolve direct/global image nodes into workspace-relative reference paths."""
+    nodes = {str(node.get("id")): node for node in graph.nodes}
+    direct_sources = [
+        str(edge.get("source") or "")
+        for edge in graph.edges
+        if str(edge.get("target") or "") == node_id
+    ]
+    source_ids = list(direct_sources)
+    for source_id, source in nodes.items():
+        data = source.get("data") if isinstance(source.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        if source_id != node_id and str(config.get("scope") or "direct") == "global":
+            source_ids.append(source_id)
+    paths: list[str] = []
+    for source_id in source_ids:
+        source = nodes.get(source_id, {})
+        data = source.get("data") if isinstance(source.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        node_type = str(source.get("type") or "")
+        path = str(
+            config.get("filePath") if node_type == "image-upload" else config.get("outputPath") if node_type == "ai-image" else ""
+        ).strip()
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 @router.get("/api/canvas/projects", response_model=list[CanvasProject])
 async def list_canvas_projects(workspace_id: str | None = Query(default=None, min_length=1)):
     if workspace_id and not store.one("workspaces", "id=?", (workspace_id,)):
@@ -321,6 +349,7 @@ async def generate_canvas_node(
         prompt = f"{prompt}\n\n参考上下文：\n{context}"
     output_filename = f"canvas-{node_type}-{uuid.uuid4().hex[:12]}"
     if node_type == "ai-image":
+        reference_image_paths = _image_reference_paths(graph, node_id)
         result = await generate_image(
             store,
             workspace["root_path"],
@@ -328,6 +357,7 @@ async def generate_canvas_node(
             size=_image_size(payload.ratio),
             output_filename=output_filename + ".png",
             preferred_model_id=payload.model_id,
+            reference_image_paths=reference_image_paths,
         )
         content_type = "image/png"
     else:

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from .api.routers import canvas
 from .api.routers.canvas import (
     _image_size,
+    _image_reference_paths,
     _project_row,
     _resolve_node_context,
     _validate_graph,
@@ -181,6 +182,35 @@ class CanvasPersistenceTests(unittest.TestCase):
             edges=[{"source": "image", "target": "video"}],
         )
         self.assertEqual(_video_first_frame_path(graph, "video"), "outputs/first-frame.png")
+
+    def test_image_references_include_direct_upload_and_global_ai_image(self) -> None:
+        graph = CanvasGraph(
+            nodes=[
+                {
+                    "id": "upload",
+                    "type": "image-upload",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"config": {"filePath": "uploads/reference.png"}},
+                },
+                {
+                    "id": "generated",
+                    "type": "ai-image",
+                    "position": {"x": 1, "y": 1},
+                    "data": {"config": {"scope": "global", "outputPath": "outputs/style.png"}},
+                },
+                {
+                    "id": "target",
+                    "type": "ai-image",
+                    "position": {"x": 2, "y": 2},
+                    "data": {"config": {}},
+                },
+            ],
+            edges=[{"source": "upload", "target": "target"}],
+        )
+        self.assertEqual(
+            _image_reference_paths(graph, "target"),
+            ["uploads/reference.png", "outputs/style.png"],
+        )
 
 
 if __name__ == "__main__":
