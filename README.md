@@ -1,18 +1,18 @@
 # mini-workbuddy
 
-一个本地优先的 AI 工作台：在同一个界面内管理工作空间、对话任务、模型、Skills、MCP、专家团，以及用于组织 AIGC 图片/视频流程的无限画布。
+一个本地优先的 AI 工作台：在同一个界面内管理工作空间、对话任务、模型、Skills、MCP、专家团，以及用于组织 AIGC 图片、视频、声音克隆流程的无限画布。
 
-项目面向单机、本地文件夹协作场景。数据默认保存在本机 SQLite 与用户选择的工作空间中；外部大模型、图片/视频模型和 MCP 服务均由用户自行配置。
+项目面向单机、本地文件夹协作场景。数据默认保存在本机 SQLite 与用户选择的工作空间中；外部大模型、图片/视频/音频模型和 MCP 服务均由用户自行配置。
 
 ## 核心能力
 
 - 工作空间与任务：按本地目录组织任务、对话、附件和最终产物。
 - Agent 对话：支持流式任务执行、审批、取消、事件重连、上下文压缩和长期记忆。
-- 模型与能力路由：聊天主模型、图片理解、图片生成和视频生成可分别配置模型。
+- 模型与能力路由：聊天主模型、图片理解、图片生成、视频生成和声音克隆可分别配置模型。
 - Skills 与 MCP：管理应用级 Skill、安装 Skill 依赖、配置 stdio / SSE / Streamable HTTP MCP 服务。
 - 专家库与专家团：单专家 Prompt 或多个只读分析 Worker 并行分析，再由主 Agent 汇总。
-- 无限画布：基于 React Flow 的 AIGC 工作流编辑器，支持文本、图片上传、AI 图片、视频上传、AI 视频、备注六类节点。
-- 媒体工作流：上传图片/视频、视频按秒抽帧预览、快捷从帧创建图片节点、AI 图片/视频产物预览与下载。
+- 无限画布：基于 React Flow 的 AIGC 工作流编辑器，支持文本、图片上传、AI 图片、视频上传、AI 视频、声音克隆、备注七类节点。
+- 媒体工作流：上传图片/视频/参考音频、视频按秒抽帧预览、快捷从帧创建图片节点、AI 图片/视频/音频产物预览与下载。
 
 ## 系统架构
 
@@ -25,7 +25,7 @@ flowchart LR
     UI["工作台 UI\n聊天 · 工作空间 · 设置 · Skills · MCP · 专家库"]
     CanvasUI["无限画布\n@xyflow/react"]
     Runtime["任务运行时\nAgentScope · SSE · 审批"]
-    Capability["能力路由与执行器\n文本 · 图片 · 视频"]
+    Capability["能力路由与执行器\n文本 · 图片 · 视频 · 声音克隆"]
     CanvasAPI["画布 API\n图校验 · 上下文解析 · 自动保存"]
     Integrations["集成层\nMCP · SkillHub · 模型提供商"]
     DB[("SQLite\n.mini-workbuddy/workbuddy.sqlite3")]
@@ -57,8 +57,10 @@ flowchart LR
     C --> T["文本润化"]
     C --> I["AI 图片生成"]
     C --> W["AI 视频生成"]
+    C --> A["MiniMax 声音克隆"]
     I --> O["工作空间 outputs/"]
     W --> O
+    A --> O
     O --> P["节点内预览、放大、下载"]
 ```
 
@@ -97,19 +99,21 @@ flowchart LR
 | 图片生成 | OpenAI Images API 兼容接口 | 工作空间 `outputs/` 中的图片 |
 | 通用视频生成 | 已配置视频模型的创建、状态轮询、下载适配 | 工作空间 `outputs/` 中的视频 |
 | 万相 2.7 图生视频 | 独立 DashScope/百炼图生视频执行器 | 直接连接 AI 图片节点的产物作为首帧 |
+| 声音克隆 | MiniMax 参考音频上传、克隆与试听音频下载适配 | 工作空间 `outputs/` 中的音频 |
 
 万相图生视频模型 ID 包含 `wan2.7-i2v` 时会自动走独立执行器。AI 视频节点需直接连接一个已有生成结果的 AI 图片节点；该图片会被转为首帧媒体提交。万相结果 URL 是临时产物地址，系统会无鉴权直连下载，避免把模型 API 的 Bearer Token 带到 OSS/CDN 下载请求中。
 
 ### 无限画布
 
 - 项目：左侧“画布项目”显示全部画布，可新建、重命名、打开并自动保存。
-- 节点：文本、图片上传、AI 图片、视频上传、AI 视频、备注。
+- 节点：文本、图片上传、AI 图片、视频上传、AI 视频、声音克隆、备注。
 - 编辑：左侧节点面板、拖拽添加、节点右侧快捷加号、复制、删除、锁定、适应视图、MiniMap、显示网格与吸附网格。
 - 连线：统一从节点右侧输出到目标节点左侧输入；禁止重复边、自连接和环路，并以有方向的圆滑动态虚线显示。
 - 上下文范围：每个节点可切换“直连”或“全局”。直连仅对直接连接的后续节点提供参考；全局节点会被当前画布的 AI 节点作为参考上下文。
 - 文本节点：可选择模型后执行“AI 润化”，直接覆盖节点中的文本内容。
 - 图片节点：上传后可预览，悬停提供“换图”“删除”；AI 图片支持放大预览和下载。
 - 视频节点：上传后支持播放/暂停、换文件、删除；可按每秒抽帧，帧列表支持横向滚动，从任意帧快捷创建并自动连线图片上传节点。
+- 声音克隆节点：上半部分上传工作空间内的 MP3、M4A 或 WAV 参考音频（最大 20MB），可在节点内试听；填写生成文案后，在同一行选择已启用的声音克隆模型并生成。生成结果保存到 `outputs/`，可试听和下载。
 
 ### 专家、Skills 与 MCP
 
@@ -127,7 +131,7 @@ mini-workbuddy/
 │   ├── repositories/         # SQLite 数据访问封装
 │   ├── services/             # 任务、运行、工作空间服务
 │   ├── agent_runtime.py      # AgentScope 运行时
-│   ├── capability_executor.py# 图片/视频模型执行与产物保存
+│   ├── capability_executor.py# 图片/视频/声音克隆模型执行与产物保存
 │   ├── model_router.py       # 能力到模型的路由
 │   └── workspace_tools.py    # 受限工作空间文件工具
 ├── frontend/
@@ -152,6 +156,7 @@ mini-workbuddy/
 └── outputs/
     ├── generated-image-*.png
     ├── generated-video-*.mp4
+    ├── generated-voice-*.mp3
     └── 最终 PPTX、文档等产物
 ```
 
@@ -210,6 +215,7 @@ npm run dev
 | `AGENTSCOPE_LIVE` | `1` | 启用真实 AgentScope；`0` 或未设置时使用本地演示执行器 |
 | `AGENT_RUN_TIMEOUT_SECONDS` | `1800` | 单个后台 Run 的安全上限，单位为秒 |
 | `OPENAI_API_KEY` | `your-api-key` | 默认 OpenAI 兼容模型的 Key |
+| `MINIMAX_API_KEY` | `your-api-key` | MiniMax 声音克隆模型的 Key |
 | 自定义 Key 变量 | `DASHSCOPE_API_KEY` | 在模型配置中填写同名“API Key 环境变量” |
 
 添加万相模型时，建议填入：
@@ -224,6 +230,18 @@ npm run dev
 | 支持视频生成 | 勾选 |
 
 为使用真实模型，还需要在“设置 → 模型配置”中启用模型，并在“能力模型路由”中将图片生成或视频生成指向对应模型。图片生成模型需兼容 OpenAI Images API 的 `/images/generations` 接口。
+
+添加 MiniMax 声音克隆模型时，建议填入：
+
+| 字段 | 示例 / 说明 |
+| --- | --- |
+| 名称 | `MiniMax 声音克隆` |
+| Model ID | 已开通的 MiniMax 语音模型 ID，例如 `speech-2.8-turbo` |
+| Base URL | 中国站：`https://api.minimaxi.com/v1` |
+| API Key 环境变量 | `MINIMAX_API_KEY` |
+| 支持声音克隆 | 勾选 |
+
+保存后，在“能力模型路由”中将“声音克隆”指向该模型。生成会将参考音频发送给 MiniMax，属于外部模型调用，可能产生费用；请仅上传已获得授权的声音样本。
 
 ## 数据与 API 概览
 
@@ -247,7 +265,7 @@ npm run dev
 | `/api/models`、`/api/capabilities` | 模型配置与能力路由 |
 | `/api/skills`、`/api/skillhub`、`/api/mcp` | Skills 与 MCP 管理 |
 | `/api/canvas/projects` | 画布项目创建、读取、更新、删除 |
-| `/api/canvas/projects/{project_id}/nodes/{node_id}/generate` | 画布 AI 图片 / 视频节点执行 |
+| `/api/canvas/projects/{project_id}/nodes/{node_id}/generate` | 画布 AI 图片、视频、声音克隆节点执行 |
 
 ## 验证与测试
 
@@ -275,7 +293,7 @@ npm run build
 
 ## 安全边界与当前范围
 
-- 工作空间文件工具限制在当前工作空间根目录内；图片、视频生成输出固定保存至 `outputs/`。
+- 工作空间文件工具限制在当前工作空间根目录内；图片、视频、声音克隆生成输出固定保存至 `outputs/`。
 - Skill 依赖在 Skill 自身目录内安装，不写入用户工作空间。
 - 专家团 Worker 首版只做独立分析，不能直接写文件或调用外部工具；主 Agent 负责实际执行与审批。
 - 模型调用、MCP 服务和生成任务会使用用户配置的外部服务，可能产生费用；重试前请先确认任务状态。
