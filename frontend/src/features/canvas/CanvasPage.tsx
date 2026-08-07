@@ -608,6 +608,8 @@ function AiVideoNode(props: NodeProps<CanvasNode>) {
   const { data, id } = props;
   const videoModels = data.models?.filter((model) => model.supports_video_generation);
   const modelOptions = videoModels?.length ? videoModels : data.models || [];
+  const selectedModel = modelOptions.find((model) => model.id === (data.config.model || modelOptions[0]?.id));
+  const isWanR2v = /wan2\.7-r2v/i.test(`${selectedModel?.model || ""} ${selectedModel?.name || ""}`);
   const set = (key: string, value: string) => data.onChange?.(id, { [key]: value });
   return (
     <NodeShell {...props}>
@@ -615,10 +617,11 @@ function AiVideoNode(props: NodeProps<CanvasNode>) {
       <div className="canvas-config-grid">
         <label><span>比例</span><select value={data.config.ratio} onChange={(event) => set("ratio", event.target.value)} onPointerDown={(event) => event.stopPropagation()}><option>16:9</option><option>9:16</option><option>4:3</option><option>3:4</option><option>1:1</option></select></label>
         <label><span>模型</span><select value={data.config.model || modelOptions[0]?.id || ""} onChange={(event) => set("model", event.target.value)} onPointerDown={(event) => event.stopPropagation()}>{modelOptions.length ? modelOptions.map((model) => <option key={model.id} value={model.id}>{model.name}</option>) : <option value="">自动选择视频模型</option>}</select></label>
-        <label><span>时长</span><select value={data.config.duration} onChange={(event) => set("duration", event.target.value)} onPointerDown={(event) => event.stopPropagation()}><option>5s</option><option>10s</option><option>15s</option></select></label>
+        <label><span>时长</span><select value={data.config.duration} onChange={(event) => set("duration", event.target.value)} onPointerDown={(event) => event.stopPropagation()}><option>5s</option><option>10s</option>{!isWanR2v && <option>15s</option>}</select></label>
         <label><span>清晰度</span><select value={data.config.resolution} onChange={(event) => set("resolution", event.target.value)} onPointerDown={(event) => event.stopPropagation()}><option>1080p</option><option>720p</option><option>4K</option></select></label>
       </div>
       <div className="canvas-audio-toggle"><button className={data.config.audio === "有声" ? "active" : ""} type="button" onClick={() => set("audio", "有声")}>◉ 有声</button><button className={data.config.audio === "无声" ? "active" : ""} type="button" onClick={() => set("audio", "无声")}>◌ 无声</button></div>
+      {isWanR2v && <p className="canvas-model-note">直连至少一张人物图和一段参考视频；含视频参考时仅支持 2–10 秒。有声会保留参考视频原音轨。</p>}
       <button className="canvas-generate" type="button" disabled={data.status === "running"} onClick={() => data.onGenerate?.(id)}>{data.status === "running" ? "生成中…" : "生成视频"}</button>
       {data.config.outputUrl && <div className="canvas-generated-output video">
         <video src={data.config.outputUrl} controls preload="metadata" />

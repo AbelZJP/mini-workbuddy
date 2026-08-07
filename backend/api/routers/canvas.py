@@ -201,6 +201,33 @@ def _video_first_frame_path(graph: CanvasGraph, node_id: str) -> str:
     return ""
 
 
+def _video_reference_paths(graph: CanvasGraph, node_id: str) -> dict[str, list[str]]:
+    """Resolve directly connected media nodes for Wan reference-to-video generation."""
+    nodes = {str(node.get("id")): node for node in graph.nodes}
+    image_paths: list[str] = []
+    video_paths: list[str] = []
+    for edge in graph.edges:
+        if str(edge.get("target") or "") != node_id:
+            continue
+        source = nodes.get(str(edge.get("source") or ""), {})
+        data = source.get("data") if isinstance(source.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        node_type = str(source.get("type") or "")
+        if node_type == "image-upload":
+            path = str(config.get("filePath") or "").strip()
+            if path and path not in image_paths:
+                image_paths.append(path)
+        elif node_type == "ai-image":
+            path = str(config.get("outputPath") or "").strip()
+            if path and path not in image_paths:
+                image_paths.append(path)
+        elif node_type == "video-upload":
+            path = str(config.get("filePath") or "").strip()
+            if path and path not in video_paths:
+                video_paths.append(path)
+    return {"image_paths": image_paths, "video_paths": video_paths}
+
+
 def _image_reference_paths(graph: CanvasGraph, node_id: str) -> list[str]:
     """Resolve direct/global image nodes into workspace-relative reference paths."""
     nodes = {str(node.get("id")): node for node in graph.nodes}
@@ -362,6 +389,7 @@ async def generate_canvas_node(
         content_type = "image/png"
     elif node_type == "ai-video":
         first_frame_path = _video_first_frame_path(graph, node_id)
+        reference_paths = _video_reference_paths(graph, node_id)
         result = await generate_video(
             store,
             workspace["root_path"],
@@ -373,6 +401,8 @@ async def generate_canvas_node(
             output_filename=output_filename + ".mp4",
             preferred_model_id=payload.model_id,
             first_frame_path=first_frame_path,
+            reference_image_paths=reference_paths["image_paths"],
+            reference_video_paths=reference_paths["video_paths"],
         )
         content_type = "video/mp4"
     else:

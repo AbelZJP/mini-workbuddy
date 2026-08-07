@@ -298,6 +298,171 @@ class CapabilityTests(unittest.TestCase):
             data_url = _wanxiang_first_frame_data_url(directory, "outputs/frame.png")
         self.assertEqual(data_url, "data:image/png;base64,ZnJhbWU=")
 
+    def test_wanxiang_r2v_anchors_character_image_and_disables_prompt_rewrite(self):
+        """Replacing r2v media with filenames or omitting OSS resolution must fail this contract."""
+        class FakeResponse:
+            def __init__(self, body: bytes, content_type: str = "application/json"):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        request_r2v = getattr(capability_executor, "_request_wanxiang_r2v", None)
+        if request_r2v is None:
+            self.fail("wan2.7-r2v 参考生视频请求尚未实现")
+        model = {
+            "id": "wan-r2v",
+            "name": "万相参考生视频",
+            "model": "wan2.7-r2v",
+            "provider": "dashscope",
+            "base_url": "https://workspace.cn-beijing.maas.aliyuncs.com",
+            "api_key_env": "TEST_VIDEO_KEY",
+            "config": json.dumps({"video_poll_interval_seconds": 1}),
+        }
+        responses = [
+            FakeResponse(json.dumps({"output": {"task_id": "task-r2v", "task_status": "PENDING"}}).encode()),
+            FakeResponse(json.dumps({"output": {"task_id": "task-r2v", "task_status": "SUCCEEDED", "video_url": "https://result.example/r2v.mp4"}}).encode()),
+            FakeResponse(b"mp4", "video/mp4"),
+        ]
+        with patch.dict("os.environ", {"TEST_VIDEO_KEY": "sk-test"}, clear=False):
+            with patch("backend.capability_executor.urllib.request.urlopen", side_effect=responses) as urlopen:
+                result = request_r2v(
+                    model,
+                    "让图1中的模特复刻视频1的舞蹈动作",
+                    "16:9",
+                    "10s",
+                    "720p",
+                    [
+                        {"type": "reference_image", "url": "oss://dashscope-instant/test/model.webp"},
+                        {"type": "reference_video", "url": "oss://dashscope-instant/test/dance.mp4"},
+                    ],
+                )
+
+        self.assertEqual(result, b"mp4")
+        create_request = urlopen.call_args_list[0].args[0]
+        payload = json.loads(create_request.data.decode())
+        self.assertEqual(payload["model"], "wan2.7-r2v")
+        self.assertEqual(payload["input"]["media"], [
+            {"type": "first_frame", "url": "oss://dashscope-instant/test/model.webp"},
+            {"type": "reference_image", "url": "oss://dashscope-instant/test/model.webp"},
+            {"type": "reference_video", "url": "oss://dashscope-instant/test/dance.mp4"},
+        ])
+        self.assertEqual(payload["parameters"]["duration"], 10)
+        self.assertFalse(payload["parameters"]["prompt_extend"])
+        self.assertIn("图1中的人物是视频全程唯一人物", payload["input"]["prompt"])
+        self.assertIn("视频1仅用作动作", payload["input"]["prompt"])
+        self.assertEqual(create_request.get_header("X-dashscope-async"), "enable")
+        self.assertEqual(create_request.get_header("X-dashscope-ossresourceresolve"), "enable")
+
+    def test_r2v_rejects_15_seconds_before_uploading_reference_media(self):
+        """Uploading media before enforcing the provider duration limit wastes external requests."""
+        model = {
+            "id": "wan-r2v",
+            "name": "万相参考生视频",
+            "model": "wan2.7-r2v",
+            "provider": "dashscope",
+            "api_key_env": "TEST_VIDEO_KEY",
+            "enabled": 1,
+            "config": json.dumps({"supports_video_generation": True, "capabilities": ["video.generate"]}),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("backend.capability_executor._wanxiang_r2v_media", side_effect=capability_executor.CapabilityExecutionError("不应上传素材")):
+                result = asyncio.run(generate_video(
+                    FakeStore([model]),
+                    directory,
+                    "让图1复刻视频1的动作",
+                    duration="15s",
+                    reference_image_paths=["uploads/model.webp"],
+                    reference_video_paths=["uploads/dance.mp4"],
+                ))
+        self.assertFalse(result["ok"])
+        self.assertIn("2 至 10 秒", result["message"])
+
+    def test_non_r2v_model_rejects_connected_image_and_video_references(self):
+        """Silently ignoring both references would recreate the original prompt-only bug."""
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("backend.capability_executor._request_video", return_value=b"mp4"):
+                result = asyncio.run(generate_video(
+                    FakeStore([video_model()]),
+                    directory,
+                    "让人物跳舞",
+                    reference_image_paths=["uploads/model.webp"],
+                    reference_video_paths=["uploads/dance.mp4"],
+                ))
+        self.assertFalse(result["ok"])
+        self.assertIn("wan2.7-r2v", result["message"])
+
+    def test_r2v_audio_remux_keeps_generated_video_length_when_source_audio_is_shorter(self):
+        """Audio remux must keep video length for either shorter or longer source tracks."""
+        remux = getattr(capability_executor, "_replace_video_audio", None)
+        if remux is None:
+            self.fail("参考视频原音轨保留尚未实现")
+        calls: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command[0] == "/tmp/ffmpeg":
+                Path(command[-1]).write_bytes(b"remuxed")
+                return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "-select_streams" in command:
+                return type("Result", (), {"returncode": 0, "stdout": "0\n", "stderr": ""})()
+            return type("Result", (), {"returncode": 0, "stdout": json.dumps({"format": {"duration": "10.0"}}), "stderr": ""})()
+
+        with tempfile.TemporaryDirectory() as directory:
+            generated = Path(directory) / "generated.mp4"
+            reference = Path(directory) / "reference.mp4"
+            generated.write_bytes(b"generated")
+            reference.write_bytes(b"reference")
+            with patch("backend.capability_executor.shutil.which", side_effect=["/tmp/ffmpeg", "/tmp/ffprobe"]), patch("backend.capability_executor.subprocess.run", side_effect=fake_run):
+                remux(generated, reference)
+            self.assertEqual(generated.read_bytes(), b"remuxed")
+        ffmpeg_command = next(command for command in calls if command[0] == "/tmp/ffmpeg")
+        self.assertNotIn("-shortest", ffmpeg_command)
+        self.assertIn("-t", ffmpeg_command)
+        if "-t" in ffmpeg_command:
+            self.assertEqual(ffmpeg_command[ffmpeg_command.index("-t") + 1], "10.0")
+
+    def test_r2v_rejects_reference_video_longer_than_provider_limit_before_upload(self):
+        """A 31-second reference video must not advance to temporary OSS upload."""
+        validate_reference = getattr(capability_executor, "_r2v_reference_file", None)
+        if validate_reference is None:
+            self.fail("万相参考素材校验尚未实现")
+        metadata = json.dumps({"streams": [{"width": 1280, "height": 720}], "format": {"duration": "31.0"}})
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reference.mp4"
+            source.write_bytes(b"reference")
+            with patch("backend.capability_executor.shutil.which", return_value="/tmp/ffprobe"), patch("backend.capability_executor.subprocess.run", return_value=type("Result", (), {"returncode": 0, "stdout": metadata, "stderr": ""})()):
+                with self.assertRaisesRegex(capability_executor.CapabilityExecutionError, "1 至 30 秒"):
+                    validate_reference(directory, "reference.mp4", "reference_video")
+
+    def test_r2v_validates_every_reference_before_any_temporary_upload(self):
+        """A bad later video must not cause an earlier valid image to be uploaded first."""
+        media_builder = getattr(capability_executor, "_wanxiang_r2v_media", None)
+        if media_builder is None:
+            self.fail("万相参考媒体上传尚未实现")
+        model = {"model": "wan2.7-r2v"}
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "model.webp"
+            video = Path(directory) / "too-long.mp4"
+            image.write_bytes(b"image")
+            video.write_bytes(b"video")
+
+            def validate_metadata(_path, media_kind):
+                if media_kind == "reference_video":
+                    raise capability_executor.CapabilityExecutionError("万相参考视频时长必须在 1 至 30 秒之间")
+
+            with patch("backend.capability_executor._validate_r2v_media_metadata", side_effect=validate_metadata), patch("backend.capability_executor._upload_dashscope_temporary_file") as upload:
+                with self.assertRaisesRegex(capability_executor.CapabilityExecutionError, "1 至 30 秒"):
+                    media_builder(model, directory, ["model.webp"], ["too-long.mp4"])
+            upload.assert_not_called()
+
     def test_dashscope_video_uses_async_contract_and_nested_result(self):
         class FakeResponse:
             def __init__(self, body: bytes, content_type: str = "application/json"):

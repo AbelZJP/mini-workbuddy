@@ -257,6 +257,45 @@ class CanvasPersistenceTests(unittest.TestCase):
         )
         self.assertEqual(_video_first_frame_path(graph, "video"), "outputs/first-frame.png")
 
+    def test_r2v_reference_paths_include_direct_uploaded_image_and_video(self) -> None:
+        """Dropping either direct upload would turn r2v back into prompt-only generation."""
+        resolver = getattr(canvas, "_video_reference_paths", None)
+        if resolver is None:
+            self.fail("wan2.7-r2v 参考媒体解析尚未实现")
+        graph = CanvasGraph(
+            nodes=[
+                {
+                    "id": "person",
+                    "type": "image-upload",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"config": {"filePath": "uploads/model.webp"}},
+                },
+                {
+                    "id": "dance",
+                    "type": "video-upload",
+                    "position": {"x": 0, "y": 100},
+                    "data": {"config": {"filePath": "uploads/dance.mp4"}},
+                },
+                {
+                    "id": "video",
+                    "type": "ai-video",
+                    "position": {"x": 400, "y": 0},
+                    "data": {"config": {}},
+                },
+            ],
+            edges=[
+                {"source": "person", "target": "video"},
+                {"source": "dance", "target": "video"},
+            ],
+        )
+        self.assertEqual(
+            resolver(graph, "video"),
+            {
+                "image_paths": ["uploads/model.webp"],
+                "video_paths": ["uploads/dance.mp4"],
+            },
+        )
+
     def test_image_references_include_direct_upload_and_global_ai_image(self) -> None:
         graph = CanvasGraph(
             nodes=[
