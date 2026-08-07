@@ -112,7 +112,7 @@ export function SettingsPage({
                 className="dashed-button model-add-button"
                 onClick={() => setEditingModel(null)}
               >
-                ＋ 添加 OpenAI 兼容模型
+                ＋ 添加模型
               </button>
               {models.map((model) => (
                 <div className="model-row" key={model.id}>

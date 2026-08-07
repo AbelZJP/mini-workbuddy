@@ -13,16 +13,90 @@ from .api.routers import canvas
 from .api.routers.canvas import (
     _image_size,
     _image_reference_paths,
+    _graph_from_row,
     _project_row,
     _resolve_node_context,
     _validate_graph,
     _video_first_frame_path,
 )
-from .schemas import CanvasGraph, CreateCanvasProject
+from .schemas import CanvasGenerateRequest, CanvasGraph, CreateCanvasProject
 from .storage import Store
 
 
 class CanvasPersistenceTests(unittest.TestCase):
+    def test_graph_accepts_voice_clone_node(self) -> None:
+        """Rejecting this node type would make a newly added canvas node impossible to save."""
+        graph = CanvasGraph(
+            nodes=[
+                {
+                    "id": "voice",
+                    "type": "voice-clone",
+                    "position": {"x": 0, "y": 0},
+                    "data": {"config": {"filePath": "uploads/reference.wav"}},
+                }
+            ]
+        )
+        try:
+            _validate_graph(graph)
+        except HTTPException as exc:
+            self.fail(f"声音克隆节点不应被图校验拒绝：{exc.detail}")
+
+    def test_voice_clone_node_generates_and_persists_audio_output(self) -> None:
+        """Dropping the node's reference audio or output metadata would break playback after reload."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = Store(Path(temp_dir) / "canvas.sqlite3")
+            store.insert("workspaces", {
+                "id": "workspace",
+                "name": "测试空间",
+                "root_path": temp_dir,
+                "description": "",
+                "created_at": "2026-08-07",
+                "updated_at": "2026-08-07",
+            })
+            graph = CanvasGraph(nodes=[{
+                "id": "voice",
+                "type": "voice-clone",
+                "position": {"x": 0, "y": 0},
+                "data": {"config": {"filePath": "uploads/reference.wav", "model": "minimax"}},
+            }])
+            store.insert("canvas_projects", {
+                "id": "project",
+                "workspace_id": "workspace",
+                "name": "测试画布",
+                "graph_json": json.dumps(graph.model_dump(), ensure_ascii=False),
+                "created_at": "2026-08-07",
+                "updated_at": "2026-08-07",
+            })
+            call: dict[str, str] = {}
+
+            async def fake_generate_voice_clone(_store, workspace_root, reference_audio_path, text, **kwargs):
+                call.update({
+                    "workspace_root": workspace_root,
+                    "reference_audio_path": reference_audio_path,
+                    "text": text,
+                    "model_id": kwargs["preferred_model_id"],
+                })
+                return {"ok": True, "artifact_path": "outputs/voice.mp3", "model_id": "minimax"}
+
+            with patch.object(canvas, "store", store), patch.object(canvas, "generate_voice_clone", side_effect=fake_generate_voice_clone):
+                try:
+                    result = asyncio.run(canvas.generate_canvas_node(
+                        "project", "voice", CanvasGenerateRequest(prompt="你好，欢迎使用声音克隆。", model_id="minimax"),
+                    ))
+                except HTTPException as exc:
+                    self.fail(f"声音克隆节点不应被生成接口拒绝：{exc.detail}")
+            self.assertEqual(call, {
+                "workspace_root": temp_dir,
+                "reference_audio_path": "uploads/reference.wav",
+                "text": "你好，欢迎使用声音克隆。",
+                "model_id": "minimax",
+            })
+            self.assertEqual(result["content_type"], "audio/mpeg")
+            saved = _graph_from_row(store.one("canvas_projects", "id=?", ("project",)))
+            config = saved.nodes[0]["data"]["config"]
+            self.assertEqual(config["outputPath"], "outputs/voice.mp3")
+            self.assertEqual(config["outputContentType"], "audio/mpeg")
+
     def test_image_ratio_maps_to_supported_2k_dimensions(self) -> None:
         self.assertEqual(_image_size("1:1"), "2048x2048")
         self.assertEqual(_image_size("4:3"), "2304x1728")

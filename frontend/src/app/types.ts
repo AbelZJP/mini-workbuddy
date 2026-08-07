@@ -54,6 +54,7 @@ export type Model = {
   supports_vision?: boolean;
   supports_image_generation?: boolean;
   supports_video_generation?: boolean;
+  supports_voice_cloning?: boolean;
   video_endpoint?: string;
   video_status_endpoint?: string;
   video_content_endpoint?: string;
@@ -146,6 +147,7 @@ export type CanvasNodeKind =
   | "ai-image"
   | "video-upload"
   | "ai-video"
+  | "voice-clone"
   | "note";
 export type CanvasGraph = {
   nodes: Array<{

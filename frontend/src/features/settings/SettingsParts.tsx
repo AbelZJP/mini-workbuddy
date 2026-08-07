@@ -22,6 +22,7 @@ export function ModelModal({
     supports_vision: model?.supports_vision ?? false,
     supports_image_generation: model?.supports_image_generation ?? false,
     supports_video_generation: model?.supports_video_generation ?? false,
+    supports_voice_cloning: model?.supports_voice_cloning ?? false,
     video_endpoint: model?.video_endpoint || "",
     video_status_endpoint: model?.video_status_endpoint || "",
     video_content_endpoint: model?.video_content_endpoint || "",
@@ -100,8 +101,22 @@ export function ModelModal({
           />
           <span>支持视频生成</span>
         </label>
+        <label className="model-capability-option">
+          <input
+            className="model-capability-checkbox"
+            type="checkbox"
+            checked={form.supports_voice_cloning}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                supports_voice_cloning: event.target.checked,
+              }))
+            }
+          />
+          <span>支持声音克隆</span>
+        </label>
         <p className="modal-note">
-          图片理解、图片生成和视频生成是独立能力，请根据模型实际 API 能力分别勾选。
+          图片理解、图片生成、视频生成和声音克隆是独立能力，请根据模型实际 API 能力分别勾选。
         </p>
         <div className="modal-actions">
           <button className="secondary-button" onClick={onClose}>

@@ -491,6 +491,10 @@ def model_row(row: dict[str, Any]) -> ModelConfig:
             config.get("supports_video_generation", False)
             or "video.generate" in (config.get("capabilities") or [])
         ),
+        supports_voice_cloning=bool(
+            config.get("supports_voice_cloning", False)
+            or "voice.clone" in (config.get("capabilities") or [])
+        ),
         video_endpoint=str(config.get("video_endpoint") or ""),
         video_status_endpoint=str(config.get("video_status_endpoint") or ""),
         video_content_endpoint=str(config.get("video_content_endpoint") or ""),

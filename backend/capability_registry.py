@@ -54,6 +54,15 @@ registry.register(
         output_type="video",
     )
 )
+registry.register(
+    CapabilityDefinition(
+        id="voice.clone",
+        name="声音克隆",
+        description="基于参考音频克隆音色并生成试听语音，保存到当前工作空间。",
+        model_capability="voice.clone",
+        output_type="audio",
+    )
+)
 
 
 def capability_rows(store: Any) -> list[dict[str, Any]]:

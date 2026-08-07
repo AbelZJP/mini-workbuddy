@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from . import capability_executor
 from .capability_executor import _request_image, _request_video, _request_wanxiang_i2v, _seedream_reference_data_url, _wanxiang_first_frame_data_url, generate_image, generate_video
-from .capability_registry import capability_rows
+from .capability_registry import capability_rows, registry
+from .core import model_row
 from .model_router import route_model, set_capability_model
 
 
@@ -73,7 +76,115 @@ def video_model(model_id: str = "video") -> dict:
     }
 
 
+def voice_clone_model(model_id: str = "minimax-voice") -> dict:
+    return {
+        "id": model_id,
+        "name": "MiniMax 声音克隆",
+        "model": "speech-2.8-hd",
+        "provider": "minimax",
+        "base_url": "https://api.minimax.io/v1",
+        "api_key_env": "TEST_MINIMAX_KEY",
+        "enabled": 1,
+        "config": json.dumps(
+            {
+                "supports_voice_cloning": True,
+                "capabilities": ["voice.clone"],
+            }
+        ),
+    }
+
+
 class CapabilityTests(unittest.TestCase):
+    def test_minimax_requests_use_tls_1_2_context(self):
+        """Allowing TLS 1.3 negotiation here reintroduces the observed EOF handshake failure."""
+        context_factory = getattr(capability_executor, "_minimax_ssl_context", None)
+        if context_factory is None:
+            self.fail("MiniMax TLS 上下文尚未实现")
+        context = context_factory()
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(context.maximum_version, ssl.TLSVersion.TLSv1_2)
+
+    def test_model_row_exposes_voice_clone_capability(self):
+        """Omitting this field would make a configured MiniMax model invisible to the canvas picker."""
+        model = model_row(voice_clone_model())
+        self.assertTrue(getattr(model, "supports_voice_cloning", False))
+
+    def test_voice_clone_capability_uses_declared_voice_model(self):
+        """Removing the voice capability flag must stop this model from being routed."""
+        model = voice_clone_model()
+        model["config"] = json.dumps({"supports_voice_cloning": True})
+        store = FakeStore([model])
+        routed = route_model(store, "voice.clone")
+        self.assertIsNotNone(routed)
+        self.assertEqual(routed["id"], "minimax-voice")
+        self.assertEqual(
+            next(item for item in capability_rows(store) if item["id"] == "voice.clone")["model_id"],
+            "minimax-voice",
+        )
+        self.assertIsNotNone(registry.get("voice.clone"))
+
+    def test_voice_clone_uploads_reference_and_saves_demo_audio(self):
+        """A missing MiniMax upload, clone, download, or local write must fail this test."""
+        class FakeResponse:
+            def __init__(self, body: bytes, content_type: str = "application/json"):
+                self.body = body
+                self.headers = {"Content-Type": content_type}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.body
+
+        generate_voice_clone = getattr(capability_executor, "generate_voice_clone", None)
+        if generate_voice_clone is None:
+            self.fail("声音克隆执行器尚未实现")
+        responses = [
+            FakeResponse(json.dumps({"file": {"file_id": 12345}, "base_resp": {"status_code": 0}}).encode()),
+            FakeResponse(json.dumps({"demo_audio": "https://result.example/demo.mp3", "base_resp": {"status_code": 0}}).encode()),
+            FakeResponse(b"mp3-data", "audio/mpeg"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            reference = Path(directory) / "uploads" / "voice.wav"
+            reference.parent.mkdir()
+            reference.write_bytes(b"wav-data")
+            with patch.dict("os.environ", {"TEST_MINIMAX_KEY": "sk-test"}, clear=False):
+                with patch("backend.capability_executor.urllib.request.urlopen", side_effect=responses) as urlopen:
+                    result = asyncio.run(
+                        generate_voice_clone(
+                            FakeStore([voice_clone_model()]),
+                            directory,
+                            "uploads/voice.wav",
+                            "你好，欢迎使用声音克隆。",
+                            output_filename="canvas-voice.mp3",
+                        )
+                    )
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["artifact_path"], "outputs/canvas-voice.mp3")
+            self.assertEqual((Path(directory) / "outputs" / "canvas-voice.mp3").read_bytes(), b"mp3-data")
+        upload_request = urlopen.call_args_list[0].args[0]
+        clone_request = urlopen.call_args_list[1].args[0]
+        clone_payload = json.loads(clone_request.data.decode())
+        self.assertEqual(upload_request.full_url, "https://api.minimax.io/v1/files/upload")
+        self.assertIn(b'purpose"\r\n\r\nvoice_clone', upload_request.data)
+        self.assertEqual(clone_request.full_url, "https://api.minimax.io/v1/voice_clone")
+        self.assertEqual(clone_payload["file_id"], 12345)
+        self.assertEqual(clone_payload["text"], "你好，欢迎使用声音克隆。")
+        self.assertEqual(clone_payload["model"], "speech-2.8-hd")
+        self.assertEqual(urlopen.call_args_list[2].args[0].full_url, "https://result.example/demo.mp3")
+
+    def test_voice_clone_rejects_reference_outside_workspace(self):
+        """Accepting an absolute external audio path would expose arbitrary local files."""
+        encode_reference = getattr(capability_executor, "_voice_clone_reference_path", None)
+        if encode_reference is None:
+            self.fail("声音克隆参考音频校验尚未实现")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(Exception, "当前工作空间"):
+                encode_reference(directory, "/tmp/not-allowed.wav")
+
     def test_seedream_reference_images_use_ark_image_field(self):
         class FakeResponse:
             def __init__(self, body: bytes):

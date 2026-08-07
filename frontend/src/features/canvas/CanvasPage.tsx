@@ -89,6 +89,12 @@ const NODE_META: Record<
     description: "生成一段动态视频",
     className: "ai-video",
   },
+  "voice-clone": {
+    label: "声音克隆",
+    icon: "♬",
+    description: "上传参考音频，克隆音色并生成试听语音",
+    className: "voice-clone",
+  },
   note: {
     label: "备注",
     icon: "✎",
@@ -109,6 +115,17 @@ const DEFAULT_CONFIG: Record<CanvasNodeKind, Record<string, string>> = {
     duration: "5s",
     resolution: "1080p",
     audio: "有声",
+    outputPath: "",
+    outputUrl: "",
+    outputFileName: "",
+  },
+  "voice-clone": {
+    fileName: "",
+    filePath: "",
+    fileUrl: "",
+    contentType: "",
+    prompt: "",
+    model: "",
     outputPath: "",
     outputUrl: "",
     outputFileName: "",
@@ -611,6 +628,76 @@ function AiVideoNode(props: NodeProps<CanvasNode>) {
   );
 }
 
+function VoiceCloneNode(props: NodeProps<CanvasNode>) {
+  const { data, id } = props;
+  const voiceModels = data.models?.filter((model) => model.supports_voice_cloning);
+  const modelOptions = voiceModels?.length ? voiceModels : [];
+  const referenceUrl = data.config.fileUrl || data.previewUrl;
+  const clearReference = () => data.onChange?.(id, {
+    fileName: "",
+    filePath: "",
+    fileUrl: "",
+    contentType: "",
+    size: "",
+  });
+  const fileInput = (
+    <input
+      type="file"
+      accept="audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,.mp3,.m4a,.wav"
+      onChange={(event) => {
+        const file = event.target.files?.[0];
+        if (file) data.onUpload?.(id, file);
+        event.currentTarget.value = "";
+      }}
+    />
+  );
+  return (
+    <NodeShell {...props}>
+      {referenceUrl ? (
+        <div className="canvas-voice-reference" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="canvas-voice-reference-head">
+            <span>参考音频</span>
+            <strong title={data.config.fileName}>{data.config.fileName}</strong>
+          </div>
+          <audio src={referenceUrl} controls preload="metadata" />
+          <div className="canvas-media-actions">
+            <label className="canvas-media-action">更换音频{fileInput}</label>
+            <button className="canvas-media-action danger" type="button" onClick={clearReference}>删除</button>
+          </div>
+        </div>
+      ) : (
+        <label className="canvas-upload-box canvas-voice-upload" onPointerDown={(event) => event.stopPropagation()}>
+          {fileInput}
+          <span className="canvas-upload-symbol">♬</span>
+          <strong>点击上传参考音频</strong>
+          <small>MP3 / M4A / WAV · 10 秒–5 分钟 · ≤20MB</small>
+        </label>
+      )}
+      <textarea
+        className="canvas-textarea canvas-prompt"
+        value={data.config.prompt || ""}
+        onChange={(event) => data.onChange?.(id, { prompt: event.target.value })}
+        placeholder="输入要生成的语音文案..."
+        onPointerDown={(event) => event.stopPropagation()}
+      />
+      <div className="canvas-voice-generate-row" onPointerDown={(event) => event.stopPropagation()}>
+        <select
+          aria-label="语音模型"
+          value={data.config.model || modelOptions[0]?.id || ""}
+          onChange={(event) => data.onChange?.(id, { model: event.target.value })}
+        >
+          {modelOptions.length ? modelOptions.map((model) => <option key={model.id} value={model.id}>{model.name}</option>) : <option value="">未配置语音模型</option>}
+        </select>
+        <button className="canvas-generate" type="button" disabled={data.status === "running" || !modelOptions.length} onClick={() => data.onGenerate?.(id)}>{data.status === "running" ? "生成中…" : "生成语音"}</button>
+      </div>
+      {data.config.outputUrl && <div className="canvas-generated-output audio" onPointerDown={(event) => event.stopPropagation()}>
+        <audio src={data.config.outputUrl} controls preload="metadata" />
+        <div className="canvas-generated-actions"><span>生成语音</span><a href={data.config.outputUrl} download={data.config.outputFileName || "generated-voice.mp3"}>下载音频</a></div>
+      </div>}
+    </NodeShell>
+  );
+}
+
 function NoteNode(props: NodeProps<CanvasNode>) {
   const { data, id } = props;
   return <NodeShell {...props}><textarea className="canvas-textarea canvas-note-text" value={data.config.content || ""} onChange={(event) => data.onChange?.(id, { content: event.target.value })} placeholder="记录想法、说明或待办..." onPointerDown={(event) => event.stopPropagation()} /></NodeShell>;
@@ -622,6 +709,7 @@ const nodeTypes = {
   "ai-image": AiImageNode,
   "video-upload": UploadNode,
   "ai-video": AiVideoNode,
+  "voice-clone": VoiceCloneNode,
   note: NoteNode,
 };
 
@@ -719,10 +807,14 @@ function CanvasEditor({
     onGenerate: async (id: string) => {
       const projectWorkspaceId = projectWorkspaceRef.current;
       const node = nodesRef.current.find((item) => item.id === id);
-      if (!node || !["ai-image", "ai-video"].includes(node.data.kind)) return;
+      if (!node || !["ai-image", "ai-video", "voice-clone"].includes(node.data.kind)) return;
       const prompt = node.data.config.prompt?.trim() || "";
       if (!prompt) {
-        setError("请先输入生成提示词");
+        setError(node.data.kind === "voice-clone" ? "请先输入要生成的语音文案" : "请先输入生成提示词");
+        return;
+      }
+      if (node.data.kind === "voice-clone" && !node.data.config.filePath) {
+        setError("请先上传用于声音克隆的参考音频");
         return;
       }
       setError("");

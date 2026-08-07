@@ -39,6 +39,7 @@ class ModelConfig(BaseModel):
     supports_vision: bool = False
     supports_image_generation: bool = False
     supports_video_generation: bool = False
+    supports_voice_cloning: bool = False
     video_endpoint: str = ""
     video_status_endpoint: str = ""
     video_content_endpoint: str = ""

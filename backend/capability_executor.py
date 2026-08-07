@@ -5,6 +5,7 @@ import base64
 import json
 import mimetypes
 import os
+import ssl
 import time
 import urllib.parse
 import urllib.error
@@ -184,6 +185,178 @@ def _safe_video_output_path(workspace_root: str, output_filename: str) -> tuple[
         raise CapabilityExecutionError("视频输出路径超出当前工作空间，已拒绝写入")
     target.parent.mkdir(parents=True, exist_ok=True)
     return target, target.relative_to(root).as_posix()
+
+
+def _safe_audio_output_path(workspace_root: str, output_filename: str) -> tuple[Path, str]:
+    root = Path(workspace_root).expanduser().resolve()
+    filename = Path(output_filename or "").name
+    if not filename or filename in {".", ".."}:
+        filename = f"generated-voice-{uuid.uuid4().hex[:10]}.mp3"
+    if Path(output_filename or filename).name != output_filename and output_filename:
+        raise CapabilityExecutionError("语音输出文件名只能是当前工作空间内的文件名")
+    if Path(filename).suffix.lower() not in {".mp3", ".wav", ".m4a"}:
+        filename += ".mp3"
+    target = (root / "outputs" / filename).resolve()
+    if not target.is_relative_to(root):
+        raise CapabilityExecutionError("语音输出路径超出当前工作空间，已拒绝写入")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target, target.relative_to(root).as_posix()
+
+
+def _voice_clone_reference_path(workspace_root: str, relative_path: str) -> Path:
+    root = Path(workspace_root).expanduser().resolve()
+    source = Path(relative_path or "")
+    if source.is_absolute():
+        raise CapabilityExecutionError("声音克隆参考音频必须来自当前工作空间")
+    target = (root / source).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise CapabilityExecutionError("未找到可用于声音克隆的参考音频")
+    if target.suffix.lower() not in {".mp3", ".m4a", ".wav"}:
+        raise CapabilityExecutionError("声音克隆参考音频仅支持 MP3、M4A 或 WAV")
+    if target.stat().st_size > 20 * 1024 * 1024:
+        raise CapabilityExecutionError("声音克隆参考音频不能超过 20MB")
+    return target
+
+
+def _minimax_base_url(model: dict[str, Any]) -> str:
+    config = model_config(model)
+    base_url = str(model.get("base_url") or config.get("base_url") or "https://api.minimax.io/v1").rstrip("/")
+    return base_url if base_url.endswith("/v1") else base_url + "/v1"
+
+
+def _minimax_ssl_context() -> ssl.SSLContext:
+    """MiniMax 中国站在部分网络环境下需固定使用 TLS 1.2。"""
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.maximum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
+def _minimax_response_error(body: dict[str, Any]) -> str:
+    base_resp = body.get("base_resp") if isinstance(body, dict) else {}
+    if not isinstance(base_resp, dict):
+        return "MiniMax 返回格式无效"
+    if int(base_resp.get("status_code") or 0) == 0:
+        return ""
+    return str(base_resp.get("status_msg") or "MiniMax 请求失败")
+
+
+def _multipart_upload_body(source: Path) -> tuple[str, bytes]:
+    boundary = f"----MiniWorkBuddy{uuid.uuid4().hex}"
+    media_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+    chunks = [
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nvoice_clone\r\n".encode(),
+        (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{source.name}\"\r\n"
+            f"Content-Type: {media_type}\r\n\r\n"
+        ).encode(),
+        source.read_bytes(),
+        f"\r\n--{boundary}--\r\n".encode(),
+    ]
+    return boundary, b"".join(chunks)
+
+
+def _request_voice_clone(model: dict[str, Any], reference: Path, text: str) -> bytes:
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
+    api_key_env = str(model.get("api_key_env") or "")
+    api_key = os.getenv(api_key_env, "") if api_key_env else ""
+    if not api_key:
+        raise CapabilityExecutionError(
+            f"MiniMax 语音模型“{model.get('name', model.get('model', '当前模型'))}”未读取到 API Key。"
+        )
+    base_url = _minimax_base_url(model)
+    boundary, upload_body = _multipart_upload_body(reference)
+    upload_request = urllib.request.Request(
+        base_url + "/files/upload",
+        data=upload_body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    tls_context = _minimax_ssl_context()
+    try:
+        with urllib.request.urlopen(upload_request, timeout=180, context=tls_context) as response:
+            upload_result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:600]
+        raise CapabilityExecutionError(f"MiniMax 参考音频上传失败（HTTP {exc.code}）：{detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise CapabilityExecutionError(f"MiniMax 参考音频上传失败：{exc}") from exc
+    error = _minimax_response_error(upload_result)
+    file_id = (upload_result.get("file") or {}).get("file_id") if isinstance(upload_result, dict) else None
+    if error or file_id is None:
+        raise CapabilityExecutionError(f"MiniMax 参考音频上传失败：{error or '没有返回 file_id'}")
+
+    clone_payload = {
+        "file_id": file_id,
+        "voice_id": f"workbuddy-{uuid.uuid4().hex}",
+        "text": text,
+        "model": model.get("model"),
+    }
+    clone_request = urllib.request.Request(
+        base_url + "/voice_clone",
+        data=json.dumps(clone_payload).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(clone_request, timeout=300, context=tls_context) as response:
+            clone_result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")[:600]
+        raise CapabilityExecutionError(f"MiniMax 声音克隆失败（HTTP {exc.code}）：{detail}") from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise CapabilityExecutionError(f"MiniMax 声音克隆失败：{exc}") from exc
+    error = _minimax_response_error(clone_result)
+    audio_url = str(clone_result.get("demo_audio") or "") if isinstance(clone_result, dict) else ""
+    if error or not audio_url:
+        raise CapabilityExecutionError(f"MiniMax 声音克隆失败：{error or '没有返回试听音频'}")
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(audio_url), timeout=300, context=tls_context
+        ) as response:
+            return response.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        raise CapabilityExecutionError(f"下载 MiniMax 试听音频失败：{exc}") from exc
+
+
+async def generate_voice_clone(
+    store: Any,
+    workspace_root: str,
+    reference_audio_path: str,
+    text: str,
+    output_filename: str = "",
+    preferred_model_id: str = "",
+) -> dict[str, Any]:
+    """Clone a workspace audio reference with MiniMax and persist its demo audio locally."""
+    text = str(text or "").strip()
+    if not text:
+        return {"ok": False, "retryable": False, "message": "生成语音文案不能为空"}
+    model = route_model(store, "voice.clone", preferred_model_id)
+    if not model:
+        return {
+            "ok": False,
+            "retryable": False,
+            "message": "没有配置声音克隆模型。请在设置中添加 MiniMax 模型并勾选“支持声音克隆”。",
+        }
+    try:
+        reference = _voice_clone_reference_path(workspace_root, reference_audio_path)
+        target, relative_path = _safe_audio_output_path(workspace_root, output_filename)
+        audio_bytes = await asyncio.to_thread(_request_voice_clone, model, reference, text)
+        target.write_bytes(audio_bytes)
+    except (OSError, CapabilityExecutionError) as exc:
+        return {"ok": False, "retryable": False, "message": str(exc)}
+    return {
+        "ok": True,
+        "retryable": False,
+        "message": "声音克隆完成",
+        "artifact_path": relative_path,
+        "artifact_type": "audio",
+        "artifact_operation": "created",
+        "model_id": model["id"],
+    }
 
 
 def _video_size(ratio: str, resolution: str) -> str:

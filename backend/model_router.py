@@ -27,6 +27,8 @@ def model_capabilities(row: dict[str, Any]) -> set[str]:
         capabilities.add("image.generate")
     if config.get("supports_video_generation"):
         capabilities.add("video.generate")
+    if config.get("supports_voice_cloning"):
+        capabilities.add("voice.clone")
     return capabilities
 
 

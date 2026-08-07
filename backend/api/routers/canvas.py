@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Query
 
 from ...core import ROOT, now, store, uuid
-from ...capability_executor import generate_image, generate_video
+from ...capability_executor import generate_image, generate_video, generate_voice_clone
 from ...model_router import model_config
 from ...schemas import (
     CanvasPolishRequest,
@@ -25,7 +25,7 @@ from ...schemas import (
 )
 
 router = APIRouter()
-ALLOWED_NODE_TYPES = {"text", "image-upload", "ai-image", "video-upload", "ai-video", "note"}
+ALLOWED_NODE_TYPES = {"text", "image-upload", "ai-image", "video-upload", "ai-video", "voice-clone", "note"}
 
 
 def _polish_text(model: dict[str, Any], content: str) -> str:
@@ -341,11 +341,11 @@ async def generate_canvas_node(
     if not node:
         raise HTTPException(404, "目标节点不存在")
     node_type = str(node.get("type") or "")
-    if node_type not in {"ai-image", "ai-video"}:
-        raise HTTPException(400, "只有 AI 图片和 AI 视频节点可以生成产物")
+    if node_type not in {"ai-image", "ai-video", "voice-clone"}:
+        raise HTTPException(400, "只有 AI 图片、AI 视频和声音克隆节点可以生成产物")
     context = _resolve_node_context(graph, node_id)["context"]
     prompt = payload.prompt.strip()
-    if context:
+    if context and node_type != "voice-clone":
         prompt = f"{prompt}\n\n参考上下文：\n{context}"
     output_filename = f"canvas-{node_type}-{uuid.uuid4().hex[:12]}"
     if node_type == "ai-image":
@@ -360,7 +360,7 @@ async def generate_canvas_node(
             reference_image_paths=reference_image_paths,
         )
         content_type = "image/png"
-    else:
+    elif node_type == "ai-video":
         first_frame_path = _video_first_frame_path(graph, node_id)
         result = await generate_video(
             store,
@@ -375,6 +375,21 @@ async def generate_canvas_node(
             first_frame_path=first_frame_path,
         )
         content_type = "video/mp4"
+    else:
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        config = data.get("config") if isinstance(data.get("config"), dict) else {}
+        reference_audio_path = str(config.get("filePath") or "").strip()
+        if not reference_audio_path:
+            raise HTTPException(400, "请先上传用于声音克隆的参考音频")
+        result = await generate_voice_clone(
+            store,
+            workspace["root_path"],
+            reference_audio_path,
+            prompt,
+            output_filename=output_filename + ".mp3",
+            preferred_model_id=payload.model_id,
+        )
+        content_type = "audio/mpeg"
     if not result.get("ok"):
         raise HTTPException(502, str(result.get("message") or "媒体生成失败"))
     data = node.get("data") if isinstance(node.get("data"), dict) else {}
